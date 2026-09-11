@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      3.1
+// @version      3.2
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -21,7 +21,7 @@ const CATS = Object.keys(DATA);
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '3.1';
+const SCRIPT_VERSION = '3.2';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
