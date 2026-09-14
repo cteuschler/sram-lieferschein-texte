@@ -134,7 +134,7 @@ function allDocs() {
 const FIELD_SEARCH_TERMS = {
   'Internal Info':     ['Internal Info', 'Internal Memo', 'Internal Note', 'Interne Info'],
   'Shipping Info':     ['Shipping Info', 'Shipping Note', 'Versandinformation'],
-  'Remarks':           ['Remarks', 'Header Note', 'Notes', 'Bemerkungen'],
+  'Header Note':       ['Remarks', 'Header Note', 'Notes', 'Bemerkungen'],
   // Deliberately WITHOUT "Message" — too generic, would e.g. collide with the
   // "New Message:" checkbox in the Header Information.
   'Correspondence':    ['Correspondence', 'Korrespondenz'],
@@ -674,7 +674,7 @@ function buildPanel() {
       <span style="font-size:10px;color:#6B6B6B;flex-shrink:0;font-weight:700;letter-spacing:0.04em;">TARGET FIELD:</span>
       <button class="sram-fld-btn" data-lbl="Internal Info" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Internal Info</button>
       <button class="sram-fld-btn" data-lbl="Shipping Info" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Shipping Info</button>
-      <button class="sram-fld-btn" data-lbl="Remarks" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Remarks</button>
+      <button class="sram-fld-btn" data-lbl="Header Note" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Header Note</button>
       <button class="sram-fld-btn" data-lbl="Correspondence" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;" title="Automatically opens 'Write Message' if needed">Correspondence</button>
       <button id="sram-fld-auto" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#8A8A8A;font-size:10px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;" title="Reset target field selection (automatic detection)">Reset</button>
     </div>
