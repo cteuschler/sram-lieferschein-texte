@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      3.2
+// @version      3.3
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
