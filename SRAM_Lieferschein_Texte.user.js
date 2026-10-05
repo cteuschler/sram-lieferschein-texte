@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      3.5
+// @version      3.6
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -21,7 +21,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '3.5';
+const SCRIPT_VERSION = '3.6';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -760,9 +760,25 @@ function getTypes() {
 
 // ── Floating launcher button ──────────────────────
 function createLauncher() {
-  if (document.getElementById('sram-launcher')) return;
+  // Uebernahme-Logik: liegt schon ein Knopf einer AELTEREN Version im Tab
+  // (etwa weil in Tampermonkey durch eine frueher geaenderte @name-Zeile
+  // zwei Script-Eintraege existieren), wird dieser entfernt und ersetzt.
+  // Eine zweite Instanz DIESER Version erkennt die eigene Markierung und
+  // bricht ab - es entstehen also nie zwei Panels.
+  const existing = document.getElementById('sram-launcher');
+  if (existing) {
+    if (existing.dataset && existing.dataset.sramBuild === SCRIPT_VERSION) return;
+    try {
+      existing.remove();
+      const oldPanel = document.getElementById('sram-panel'); if (oldPanel) oldPanel.remove();
+      const oldTip = document.getElementById('sram-tooltip'); if (oldTip) oldTip.remove();
+      panel = null;
+      log('Aeltere Version im Tab erkannt und ersetzt.');
+    } catch (e) {}
+  }
   const btn = document.createElement('button');
   btn.id = 'sram-launcher';
+  btn.dataset.sramBuild = SCRIPT_VERSION;
   btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="4" width="14" height="2" fill="white"/><rect x="1" y="8" width="10" height="2" fill="white"/><rect x="1" y="12" width="7" height="2" fill="white"/></svg><span style="font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:600">Texte</span>`;
   btn.style.cssText = 'position:fixed;bottom:80px;right:20px;z-index:2147483646;display:flex;align-items:center;gap:8px;padding:9px 16px;background:#E31836;color:#fff;border:none;border-radius:4px;cursor:pointer;box-shadow:0 3px 14px rgba(0,0,0,0.28);letter-spacing:0.02em;';
 
@@ -883,7 +899,7 @@ function buildPanel() {
   panel.innerHTML = `
     <div style="padding:12px 14px;background:#E31836;border-bottom:1px solid #B2132B;display:flex;align-items:center;gap:10px;flex-shrink:0;">
       <img src="data:image/png;base64,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" alt="SRAM" style="height:15px;width:auto;flex-shrink:0;display:block;" />
-      <span style="font-size:13px;font-weight:600;color:#FFFFFF;flex:1;">Lieferschein Texte V3.5</span>
+      <span style="font-size:13px;font-weight:600;color:#FFFFFF;flex:1;">Lieferschein Texte V3.6</span>
       <button id="sram-lang-de" title="Deutsch" style="border:none;border-radius:3px;cursor:pointer;font-size:10.5px;padding:3px 7px;margin-right:3px;font-family:Arial,Helvetica,sans-serif;">DE</button><button id="sram-lang-en" title="English" style="border:none;border-radius:3px;cursor:pointer;font-size:10.5px;padding:3px 7px;margin-right:6px;font-family:Arial,Helvetica,sans-serif;">EN</button><button id="sram-x" style="background:none;border:none;color:#FFFFFF;cursor:pointer;font-size:18px;padding:0 4px;line-height:1;opacity:0.9;">✕</button>
     </div>
     <div id="sram-update-banner" style="display:none;padding:8px 14px;background:#FFF4D6;border-bottom:1px solid #E8D9A6;font-size:11.5px;flex-shrink:0;color:#7A5B00;line-height:1.4;"></div>
@@ -1181,6 +1197,14 @@ if (IS_TOP_FRAME) {
   } else {
     createLauncher();
   }
+}
+
+// Sicherheitsnetz: laedt eine aeltere Version erst NACH dieser, wuerde sie
+// unseren Knopf verdraengen. Zwei kurze Nachpruefungen holen das Panel dann
+// zurueck. createLauncher() bricht ab, wenn unsere Markierung schon steht.
+if (IS_TOP_FRAME) {
+  setTimeout(() => { try { createLauncher(); } catch (e) {} }, 1500);
+  setTimeout(() => { try { createLauncher(); } catch (e) {} }, 4000);
 }
 
 })();
