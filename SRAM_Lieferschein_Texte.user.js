@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         SRAM Lieferschein Texte V3 (DE/EN)
+// @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
 // @version      3.5
 // @description  Text-Assistent für das SRAM B2B Service-Portal
