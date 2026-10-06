@@ -1,16 +1,23 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      4.0
+// @version      4.1
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
 // @match        https://b2b.sram.com/*
 // @grant        none
-// @updateURL    https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js
-// @downloadURL  https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js
 // @all-frames   true
 // ==/UserScript==
+
+// Hinweis zur Update-Politik:
+// Im Metadaten-Block oben stehen bewusst KEINE Angaben zu Update- oder
+// Download-Adresse. Das Script aktualisiert sich dadurch nicht von selbst.
+// Stattdessen meldet der gelbe Balken im Panel eine neue Version, und das
+// Team entscheidet, wann es installiert.
+// Der Hinweis steht hier unten und nicht im Block darueber: Tampermonkey
+// liest den Block zeilenweise und koennte eine erwaehnte Schluesselangabe
+// sonst als echte Einstellung missdeuten.
 
 
 (function() {
@@ -22,7 +29,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '4.0';
+const SCRIPT_VERSION = '4.1';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -2220,7 +2227,9 @@ function renderBody() {
              const hatEntwurf = !!(s.correspondenceDraft && s.correspondenceDraft.text) ||
                                 (Array.isArray(s.correspondence) && s.correspondence.some(c => korrText(c)));
              const teile = [];
+             const posFelder = (s.items || []).filter(i => !i._parentItem).length;
              if (hatText) teile.push('Texte');
+             if (posFelder) teile.push('Positionsfelder');
              if (hatEntwurf) teile.push('Korrespondenz');
              if (nach.length) teile.push(nach.length + ' Material' + (nach.length > 1 ? 'ien' : ''));
              if (!teile.length) return '';
@@ -2491,7 +2500,10 @@ function findPlusForItem(tc, itemNo) {
   return { fehler: 'Kein Plus bei Position ' + itemNo + ' gefunden (nur Produktzeilen haben eines)' };
 }
 
-function fillRow(tc, rowIndex, daten, erlaubt) {
+// nurLeere = true: vorhandene Werte werden nicht angetastet. Das wird beim
+// Auffuellen BESTEHENDER Produktzeilen gebraucht - dort darf nichts
+// ueberschrieben werden, was der Bearbeiter schon eingetragen hat.
+function fillRow(tc, rowIndex, daten, erlaubt, nurLeere) {
   const rows = tc.tbl.getRows ? tc.tbl.getRows() : [];
   const row = rows[rowIndex];
   if (!row) return { ok: false, gesetzt: 0, offen: ['neue Zeile nicht erreichbar'] };
@@ -2507,6 +2519,18 @@ function fillRow(tc, rowIndex, daten, erlaubt) {
       if (erlaubt && erlaubt.indexOf(feld) < 0) return;
       const wert = daten[feld];
       if (wert === null || wert === undefined || wert === '') return;
+
+      if (nurLeere) {
+        // Steht im Feld schon etwas? Dann nicht anfassen.
+        let aktuell = null;
+        try {
+          if (typeof c.getSelectedKey === 'function' && /\.(Select|ComboBox)$/.test(c.getMetadata().getName())) aktuell = c.getSelectedKey();
+          else if (typeof c.getValue === 'function') aktuell = c.getValue();
+          else if (typeof c.getSelected === 'function') aktuell = c.getSelected();
+        } catch (e) {}
+        const leer = (aktuell === null || aktuell === undefined || aktuell === '' || aktuell === false);
+        if (!leer) { offen.push(feld + ' (bereits gefuellt, uebersprungen)'); return; }
+      }
 
       // Der Schreibweg wird nach dem CONTROL-TYP entschieden, nicht nach der
       // Verfuegbarkeit einer Methode: sap.m.Select bringt ebenfalls ein
@@ -2567,6 +2591,46 @@ function fillRow(tc, rowIndex, daten, erlaubt) {
     } catch (e) {}
   });
   return { ok: gesetzt > 0, gesetzt: gesetzt, offen: offen };
+}
+
+// Fuellt die Felder BESTEHENDER Positionszeilen wieder auf.
+//
+// Hintergrund: Die Produktzeile selbst (100, 200, ...) kommt nach einem
+// Fehlschlag vom Backend zurueck, ihre Eingabefelder sind aber leer.
+// Genau dort stehen Symptom, Serial Number, Status, Delivery Date,
+// Item Text, Purchase Date und CQF Number - im Test fehlte das Symptom,
+// weil das Zurueckschreiben bisher nur Kopftexte und neue Materialien
+// bearbeitet hat.
+function restoreItemFields(snap, fertig) {
+  const tc = findItemsTable();
+  if (!tc) { fertig([{ ok: false, text: 'Positions-Tabelle nicht gefunden' }]); return; }
+
+  const erlaubt = Array.isArray(snap.editableFields) ? snap.editableFields : null;
+  const melde = [];
+  const ctxs = tc.binding.getContexts(0, 200) || [];
+  const rows = tc.tbl.getRows ? tc.tbl.getRows() : [];
+
+  (snap.items || []).forEach(it => {
+    if (it._parentItem) return;                    // Nachtraege laufen ueber restoreMaterials
+    if (!it.Item) return;
+    let idx = -1;
+    ctxs.forEach((c, i) => {
+      const o = c.getObject() || {};
+      if (normItem(o.Item) === normItem(it.Item)) idx = i;
+    });
+    if (idx < 0) { melde.push({ ok: false, text: 'Position ' + it.Item + ': Zeile nicht gefunden' }); return; }
+    if (!rows[idx]) { melde.push({ ok: false, text: 'Position ' + it.Item + ': Zeile nicht sichtbar' }); return; }
+
+    const res = fillRow(tc, idx, it._all || it, erlaubt, true);
+    if (res.gesetzt) {
+      melde.push({ ok: true, text: 'Position ' + it.Item + ': ' + res.gesetzt + ' Feld(er) gefuellt' +
+        (res.offen.length ? ' (' + res.offen.length + ' uebersprungen)' : '') });
+    } else {
+      melde.push({ ok: null, text: 'Position ' + it.Item + ': nichts zu fuellen' });
+    }
+  });
+
+  fertig(melde.length ? melde : [{ ok: null, text: 'keine Positionsfelder zu fuellen' }]);
 }
 
 function restoreMaterials(snap, fertig) {
@@ -2785,6 +2849,11 @@ function wireRestoreButton(btn, ziel, key) {
       frage += '  Korrespondenz: ' + korrStuecke.length + ' Nachricht(en) - die erste wird zuletzt eingefuegt,\n' +
                '    der Dialog bleibt offen und muss von Hand mit "Ok" bestaetigt werden\n';
     }
+    const posListe = (snap.items || []).filter(i => !i._parentItem);
+    if (posListe.length) {
+      frage += '  Felder der Positionen ' + posListe.map(i => i.Item).join(', ') +
+               ' (Symptom, Serial, Status ... nur leere Felder)\n';
+    }
     nach.forEach(i => { frage += '  Material ' + i.Material + ' bei Position ' + i._parentItem + '\n'; });
     frage += '\nDas veraendert den Auftrag im Portal. Fortfahren?';
     if (!window.confirm(frage)) return;
@@ -2827,7 +2896,11 @@ function wireRestoreButton(btn, ziel, key) {
       });
     };
 
-    if (nach.length) {
+    // Reihenfolge: Texte -> Felder bestehender Positionen -> neue
+    // Materialien -> Korrespondenz. Die Positionsfelder zuerst, weil das
+    // Anlegen neuer Zeilen die Tabelle umbaut.
+    const dannMaterial = () => {
+      if (!nach.length) { setTimeout(zumSchluss, 200); return; }
       ausgeben(html + '<div style="font-weight:700;margin:8px 0 3px;">Materialien</div>' +
                '<div style="color:#7A5B00;">Werden angelegt...</div>');
       restoreMaterials(snap, function (melde) {
@@ -2835,8 +2908,19 @@ function wireRestoreButton(btn, ziel, key) {
                 melde.map(r => zeile(r.ok, r.text)).join('');
         setTimeout(zumSchluss, 300);
       });
+    };
+
+    const hatPositionsfelder = (snap.items || []).some(i => !i._parentItem);
+    if (hatPositionsfelder) {
+      ausgeben(html + '<div style="font-weight:700;margin:8px 0 3px;">Positionsfelder</div>' +
+               '<div style="color:#7A5B00;">Werden gefuellt...</div>');
+      restoreItemFields(snap, function (melde) {
+        html += '<div style="font-weight:700;margin:8px 0 3px;">Positionsfelder</div>' +
+                melde.map(r => zeile(r.ok, r.text)).join('');
+        setTimeout(dannMaterial, 250);
+      });
     } else {
-      zumSchluss();
+      dannMaterial();
     }
   });
 }
