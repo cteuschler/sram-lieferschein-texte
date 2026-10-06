@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      4.0
+// @version      4.1
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -19,7 +19,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '4.0';
+const SCRIPT_VERSION = '4.1';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js';
 
 function compareVersions(a, b) {
