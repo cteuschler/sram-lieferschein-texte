@@ -1940,14 +1940,14 @@ function renderBody() {
     const ok = st.found;
     h += '<div style="background:' + (ok ? '#EDF7F1' : '#FFF4F4') + ';border:1px solid ' + (ok ? '#BFE3CD' : '#F3C9C9') +
          ';border-radius:4px;padding:9px;margin-bottom:14px;">' +
-         '<div>' + (ok ? '✔ Ordersdaten erkannt' : '✖ Keine Ordersdaten gefunden') + ' · <span style="color:#777;">' + fmtAge(st.ts) + '</span></div>';
+         '<div>' + (ok ? '✔ Order data detected' : '✖ No order data found') + ' · <span style="color:#777;">' + fmtAge(st.ts) + '</span></div>';
     if (ok) {
       h += '<div style="margin-top:5px;">Order <b>' + esc(st.order) + '</b> · Items: <b>' + st.itemCount + '</b> · Attachments: ' + st.attachments + '</div>';
       if (st.textLens) {
         h += '<div style="margin-top:3px;color:#555;">Text lengths &ndash; Internal Memo: ' + st.textLens.IntMemo +
              ' · Shipping Note: ' + st.textLens.ShipNote + ' · Header Note: ' + st.textLens.HeadNote + '</div>';
       }
-      h += '<div style="margin-top:3px;color:#999;font-size:11px;">Quelle: ' + esc(st.via) + '</div>';
+      h += '<div style="margin-top:3px;color:#999;font-size:11px;">Source: ' + esc(st.via) + '</div>';
     }
     h += '</div>';
   }
@@ -1985,7 +1985,7 @@ function renderBody() {
              (sessionLost ? '<span style="margin-left:auto;background:#B4780D;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;" title="' + fmtAge(s.saveState.at) + '">Session expired ' + fmtAge(s.saveState.at) + '</span>'
                  : failed ? '<span style="margin-left:auto;background:#C62828;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;">Save failed ' + fmtAge(s.saveState.at) + '</span>'
                      : (s.saveState && s.saveState.state === 'ok'
-                        ? '<span style="margin-left:auto;background:#1D9E75;color:#fff;font-size:10px;padding:1px 6px;border-radius:3px;">gespeichert</span>' : '')) +
+                        ? '<span style="margin-left:auto;background:#1D9E75;color:#fff;font-size:10px;padding:1px 6px;border-radius:3px;">saved</span>' : '')) +
            '</div>' +
            (istAktuell
              ? '<div style="margin-top:4px;"><span style="background:#1D9E75;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;">This order is currently open</span></div>'
@@ -2017,7 +2017,7 @@ function renderBody() {
              if (hatText) teile.push('Texts');
              if (posFelder) teile.push('Item fields');
              if (hatEntwurf) teile.push('Correspondence');
-             if (nach.length) teile.push(nach.length + ' Material' + (nach.length > 1 ? 'ien' : ''));
+             if (nach.length) teile.push(nach.length + ' material' + (nach.length > 1 ? 's' : ''));
              if (!teile.length) return '';
              const aktiv = istAktuell;
              return '<div style="margin-top:8px;">' +
@@ -2025,7 +2025,7 @@ function renderBody() {
                'title="' + (aktiv ? '' : 'Only possible while this order is open') + '" ' +
                'style="width:100%;font-size:12px;font-weight:700;padding:9px 12px;border:none;border-radius:4px;' +
                'cursor:' + (aktiv ? 'pointer' : 'not-allowed') + ';background:' + (aktiv ? '#E31836' : '#D8D8D8') +
-               ';color:#fff;">\u21B3 Alles zur\u00fcckschreiben (' + teile.join(' + ') + ')</button>' +
+               ';color:#fff;">\u21B3 Restore everything (' + teile.join(' + ') + ')</button>' +
                '<div class="sram-bk-restore-result" data-k="' + esc(k) + '" style="display:none;margin-top:8px;"></div>' +
                '</div>';
            })() +
