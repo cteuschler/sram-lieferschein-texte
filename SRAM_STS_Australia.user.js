@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      4.1
+// @version      4.2
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -19,7 +19,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '4.1';
+const SCRIPT_VERSION = '4.2';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js';
 
 function compareVersions(a, b) {
@@ -1848,10 +1848,10 @@ let logOpen = false;
 function fmtAge(ts) {
   if (!ts) return '–';
   const s = Math.round((Date.now() - ts) / 1000);
-  if (s < 60) return 'vor ' + s + ' Sek.';
-  if (s < 3600) return 'vor ' + Math.round(s / 60) + ' Min.';
-  if (s < 86400) return 'vor ' + Math.round(s / 3600) + ' Std.';
-  return 'vor ' + Math.round(s / 86400) + ' Tg.';
+  if (s < 60) return s + ' sec ago';
+  if (s < 3600) return Math.round(s / 60) + ' min ago';
+  if (s < 86400) return Math.round(s / 3600) + ' h ago';
+  return Math.round(s / 86400) + ' d ago';
 }
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
