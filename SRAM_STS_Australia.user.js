@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      4.5
+// @version      4.6
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -19,7 +19,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '4.5';
+const SCRIPT_VERSION = '4.6';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js';
 
 function compareVersions(a, b) {
@@ -2179,11 +2179,10 @@ function renderBody() {
          '<div>' + (ok ? '✔ Order data detected' : '✖ No order data found') + ' · <span style="color:#777;">' + fmtAge(st.ts) + '</span></div>';
     if (ok) {
       h += '<div style="margin-top:5px;">Order <b>' + esc(st.order) + '</b> · Items: <b>' + st.itemCount + '</b> · Attachments: ' + st.attachments + '</div>';
-      if (st.textLens) {
-        h += '<div style="margin-top:3px;color:#555;">Text lengths &ndash; Internal Memo: ' + st.textLens.IntMemo +
-             ' · Shipping Note: ' + st.textLens.ShipNote + ' · Header Note: ' + st.textLens.HeadNote + '</div>';
-      }
-      h += '<div style="margin-top:3px;color:#999;font-size:11px;">Source: ' + esc(st.via) + '</div>';
+      // Per-field character counts are no longer shown - useful while
+      // debugging, meaningless to the user.
+      // Data source is no longer shown: useful for debugging, confusing
+      // for the user.
     }
     h += '</div>';
   }
@@ -2200,15 +2199,62 @@ function renderBody() {
     h += '<div style="background:#F7F7F7;border:1px solid #E5E5E5;border-radius:4px;padding:9px;margin-bottom:14px;color:#666;">' +
          'No backup yet. A backup is made automatically as soon as texts or items are present in the order.</div>';
   } else {
-    keys.forEach(k => {
+    // The order that is currently open comes first and is shown in full -
+    // it is the only one you can act on. The rest follow by age and are
+    // shown compact, so you get an overview and scroll for older ones.
+    const karten = keys.map(k => {
       const s = lsGet(k, null);
-      if (!s) return;
+      if (!s) return null;
+      return { k: k, s: s, aktuell: !!(st && st.found && String(st.order) === String(s.order)) };
+    }).filter(Boolean);
+    karten.sort((a, b) => {
+      if (a.aktuell !== b.aktuell) return a.aktuell ? -1 : 1;
+      return (b.s.ts || 0) - (a.s.ts || 0);
+    });
+
+    karten.forEach(eintrag => {
+      const k = eintrag.k, s = eintrag.s;
       const failed = s.saveState && s.saveState.state === 'failed';
       const sessionLost = s.saveState && s.saveState.state === 'session-expired';
+      const zeichen2 = ((s.texts||{}).TextIntMemo||'').length + ((s.texts||{}).TextShipNote||'').length + ((s.texts||{}).TextHeadNote||'').length;
+      const nachtraege = (s.items || []).filter(x => x._parentItem).length;
+      const korr = Array.isArray(s.correspondence) ? s.correspondence.filter(c => korrText(c)).length : 0;
+      const entwurf = !!(s.correspondenceDraft && s.correspondenceDraft.text);
+      const nummer = '<a href="#" class="sram-bk-goto" data-nr="' + esc(s.order) +
+        '" style="color:#E31836;text-decoration:underline;">' + esc(s.order) + '</a>';
+      const abzeichen = sessionLost
+        ? '<span style="background:#B4780D;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">Session expired</span>'
+        : (failed ? '<span style="background:#C62828;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">Save failed</span>' : '');
+
+      if (!eintrag.aktuell) {
+        h += '<div style="border:1px solid ' + (failed ? '#F3C9C9' : '#EDEDED') + ';border-left:3px solid ' +
+             (failed ? '#C62828' : '#D8D8D8') + ';border-radius:4px;padding:6px 8px;margin-bottom:5px;' +
+             'background:' + (failed ? '#FFF9F9' : '#FCFCFC') + ';">' +
+             '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+               '<b style="font-size:12px;">' + nummer + '</b>' +
+               '<span style="color:#999;font-size:10.5px;">' + fmtAge(s.ts) + '</span>' + abzeichen +
+               '<span style="margin-left:auto;display:flex;gap:4px;">' +
+                 '<button class="sram-bk-det" data-k="' + esc(k) + '" style="font-size:10px;padding:2px 7px;border:1px solid #D5D5D5;background:#fff;border-radius:3px;cursor:pointer;">Content</button>' +
+                 '<button class="sram-bk-cp" data-k="' + esc(k) + '" style="font-size:10px;padding:2px 7px;border:1px solid #D5D5D5;background:#fff;border-radius:3px;cursor:pointer;">Copy</button>' +
+                 ((failed || sessionLost) ? '<button class="sram-bk-clearflag" data-k="' + esc(k) + '" style="font-size:10px;padding:2px 7px;border:1px solid #D5D5D5;background:#fff;border-radius:3px;cursor:pointer;">Clear flag</button>' : '') +
+                 '<button class="sram-bk-del" data-k="' + esc(k) + '" style="font-size:10px;padding:2px 7px;border:1px solid #E0B4B4;background:#FFF6F6;color:#A02020;border-radius:3px;cursor:pointer;">Discard</button>' +
+               '</span>' +
+             '</div>' +
+             '<div style="color:#8A8A8A;font-size:10.5px;margin-top:2px;">' +
+               (s.items ? s.items.length : 0) + ' items' +
+               (nachtraege ? ' (' + nachtraege + ' added)' : '') +
+               ' · ' + zeichen2 + ' chars' +
+               (korr ? ' · ' + korr + ' message' + (korr > 1 ? 's' : '') : '') +
+               (entwurf ? ' · draft' : '') +
+             '</div>' +
+             '<div class="sram-bk-detbox" id="det-' + esc(k) + '" style="display:none;margin-top:6px;"></div>' +
+             '</div>';
+        return;
+      }
       // Ist der gerade geoeffnete Auftrag derselbe wie in dieser Sicherung?
       // Nur dann kann zurueckgeschrieben werden, deshalb wird es deutlich
       // gekennzeichnet statt den Knopf still ins Leere laufen zu lassen.
-      const istAktuell = !!(st && st.found && String(st.order) === String(s.order));
+      const istAktuell = eintrag.aktuell;
       const tl = s.texts || {};
       const rahmen = failed ? '#F3C9C9' : (istAktuell ? '#BFE3CD' : '#E5E5E5');
       const kante  = failed ? '#C62828' : (istAktuell ? '#1D9E75' : '#C7C7C7');
@@ -2242,8 +2288,11 @@ function renderBody() {
              ((s.correspondenceDraft && s.correspondenceDraft.text)
                ? ' <span style="background:#FFF4D6;border:1px solid #E8D9A6;color:#7A5B00;font-size:10px;padding:0 5px;border-radius:2px;">draft ' + s.correspondenceDraft.text.length + ' chars</span>'
                : '') + '</div>' +
-           '<div style="margin-top:3px;color:#888;font-size:11px;">Reason: ' + esc(s.reason || '–') +
-             (s.merged ? ' · merged from several states' : '') + '</div>' +
+           // "Reason" only when it says something: "automatic" is the normal
+           // case and therefore noise.
+           ((s.reason && s.reason !== 'automatic' && s.reason !== 'automatisch')
+             ? '<div style="margin-top:3px;color:#888;font-size:11px;">Reason: ' + esc(s.reason) + '</div>'
+             : '') +
            // Der Hauptknopf steht bewusst direkt auf der Karte: im Ernstfall
            // will man zurueckschreiben, nicht erst aufklappen.
            (function () {
