@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      4.8
+// @version      5.0
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -29,7 +29,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '4.8';
+const SCRIPT_VERSION = '5.0';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -2452,11 +2452,12 @@ function renderBody() {
          '<div>' + (ok ? '✔ Auftragsdaten erkannt' : '✖ Keine Auftragsdaten gefunden') + ' · <span style="color:#777;">' + fmtAge(st.ts) + '</span></div>';
     if (ok) {
       h += '<div style="margin-top:5px;">Auftrag <b>' + esc(st.order) + '</b> · Positionen: <b>' + st.itemCount + '</b> · Anhänge: ' + st.attachments + '</div>';
-      if (st.textLens) {
-        h += '<div style="margin-top:3px;color:#555;">Textlängen – Internal Memo: ' + st.textLens.IntMemo +
-             ' · Shipping Note: ' + st.textLens.ShipNote + ' · Header Note: ' + st.textLens.HeadNote + '</div>';
-      }
-      h += '<div style="margin-top:3px;color:#999;font-size:11px;">Quelle: ' + esc(st.via) + '</div>';
+      // Zeichenzahl je Textfeld wird nicht mehr angezeigt - fuer die
+      // Fehlersuche war sie nuetzlich, dem Anwender sagt sie nichts.
+      // Der Wert bleibt im Statuseintrag erhalten.
+      // Herkunft der Daten (z. B. "__xmlview0--internalMemoTextArea") wird
+      // nicht mehr angezeigt: fuer die Fehlersuche war sie nuetzlich, fuer
+      // den Anwender ist sie nur verwirrend. Im Protokoll steckt sie weiter.
     }
     h += '</div>';
   }
@@ -2473,16 +2474,66 @@ function renderBody() {
     h += '<div style="background:#F7F7F7;border:1px solid #E5E5E5;border-radius:4px;padding:9px;margin-bottom:14px;color:#666;">' +
          'Noch keine Sicherung vorhanden. Sobald Texte oder Positionen im Auftrag stehen, wird automatisch gesichert.</div>';
   } else {
-    keys.forEach(k => {
+    // Reihenfolge und Darstellung:
+    // Der gerade geoeffnete Auftrag steht oben und wird vollstaendig
+    // angezeigt - nur mit ihm kann man arbeiten. Alle anderen folgen
+    // nach Alter und werden schmal dargestellt, damit man sie
+    // ueberblickt und bei Bedarf nach unten scrollt.
+    const karten = keys.map(k => {
       const s = lsGet(k, null);
-      if (!s) return;
+      if (!s) return null;
+      return { k: k, s: s, aktuell: !!(st && st.found && String(st.order) === String(s.order)) };
+    }).filter(Boolean);
+    karten.sort((a, b) => {
+      if (a.aktuell !== b.aktuell) return a.aktuell ? -1 : 1;
+      return (b.s.ts || 0) - (a.s.ts || 0);
+    });
+
+    karten.forEach(eintrag => {
+      const k = eintrag.k, s = eintrag.s, istAktuell = eintrag.aktuell;
       const failed = s.saveState && s.saveState.state === 'fehlgeschlagen';
       const sessionLost = s.saveState && s.saveState.state === 'sitzung-abgelaufen';
-      // Ist der gerade geoeffnete Auftrag derselbe wie in dieser Sicherung?
-      // Nur dann kann zurueckgeschrieben werden, deshalb wird es deutlich
-      // gekennzeichnet statt den Knopf still ins Leere laufen zu lassen.
-      const istAktuell = !!(st && st.found && String(st.order) === String(s.order));
       const tl = s.texts || {};
+      const zeichen = (tl.TextIntMemo || '').length + (tl.TextShipNote || '').length + (tl.TextHeadNote || '').length;
+      const nachtraege = (s.items || []).filter(i => i._parentItem).length;
+      const korr = Array.isArray(s.correspondence) ? s.correspondence.filter(c => korrText(c)).length : 0;
+      const entwurf = !!(s.correspondenceDraft && s.correspondenceDraft.text);
+
+      const nummer = '<a href="#" class="sram-bk-goto" data-nr="' + esc(s.order) +
+        '" style="color:#E31836;text-decoration:underline;">' + esc(s.order) + '</a>';
+      const abzeichen = sessionLost
+        ? '<span style="background:#B4780D;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">Sitzung abgelaufen</span>'
+        : (failed ? '<span style="background:#C62828;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">Speichern fehlgeschlagen</span>' : '');
+
+      if (!istAktuell) {
+        // ── Schmale Zeile fuer nicht geoeffnete Auftraege ──
+        h += '<div style="border:1px solid ' + (failed ? '#F3C9C9' : '#EDEDED') + ';border-left:3px solid ' +
+             (failed ? '#C62828' : '#D8D8D8') + ';border-radius:4px;padding:6px 8px;margin-bottom:5px;' +
+             'background:' + (failed ? '#FFF9F9' : '#FCFCFC') + ';">' +
+             '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+               '<b style="font-size:12px;">' + nummer + '</b>' +
+               '<span style="color:#999;font-size:10.5px;">' + fmtAge(s.ts) + '</span>' +
+               abzeichen +
+               '<span style="margin-left:auto;display:flex;gap:4px;">' +
+                 '<button class="sram-bk-det" data-k="' + esc(k) + '" style="font-size:10px;padding:2px 7px;border:1px solid #D5D5D5;background:#fff;border-radius:3px;cursor:pointer;">Inhalt</button>' +
+                 '<button class="sram-bk-cp" data-k="' + esc(k) + '" style="font-size:10px;padding:2px 7px;border:1px solid #D5D5D5;background:#fff;border-radius:3px;cursor:pointer;">Kopieren</button>' +
+                 ((failed || sessionLost) ? '<button class="sram-bk-clearflag" data-k="' + esc(k) + '" style="font-size:10px;padding:2px 7px;border:1px solid #D5D5D5;background:#fff;border-radius:3px;cursor:pointer;">Markierung</button>' : '') +
+                 '<button class="sram-bk-del" data-k="' + esc(k) + '" style="font-size:10px;padding:2px 7px;border:1px solid #E0B4B4;background:#FFF6F6;color:#A02020;border-radius:3px;cursor:pointer;">Verwerfen</button>' +
+               '</span>' +
+             '</div>' +
+             '<div style="color:#8A8A8A;font-size:10.5px;margin-top:2px;">' +
+               (s.items ? s.items.length : 0) + ' Positionen' +
+               (nachtraege ? ' (' + nachtraege + ' Nachtrag' + (nachtraege > 1 ? 'e' : '') + ')' : '') +
+               ' · ' + zeichen + ' Zeichen' +
+               (korr ? ' · ' + korr + ' Nachricht' + (korr > 1 ? 'en' : '') : '') +
+               (entwurf ? ' · Entwurf' : '') +
+             '</div>' +
+             '<div class="sram-bk-detbox" id="det-' + esc(k) + '" style="display:none;margin-top:6px;"></div>' +
+             '</div>';
+        return;
+      }
+
+      // ── Vollstaendige Karte fuer den geoeffneten Auftrag ──
       const rahmen = failed ? '#F3C9C9' : (istAktuell ? '#BFE3CD' : '#E5E5E5');
       const kante  = failed ? '#C62828' : (istAktuell ? '#1D9E75' : '#C7C7C7');
       const grund  = failed ? '#FFF8F8' : (istAktuell ? '#F3FAF6' : '#fff');
@@ -2516,8 +2567,12 @@ function renderBody() {
              ((s.correspondenceDraft && s.correspondenceDraft.text)
                ? ' <span style="background:#FFF4D6;border:1px solid #E8D9A6;color:#7A5B00;font-size:10px;padding:0 5px;border-radius:2px;">Entwurf ' + s.correspondenceDraft.text.length + ' Zeichen</span>'
                : '') + '</div>' +
-           '<div style="margin-top:3px;color:#888;font-size:11px;">Grund: ' + esc(s.reason || '–') +
-             (s.merged ? ' · aus mehreren St&auml;nden zusammengef&uuml;hrt' : '') + '</div>' +
+           // "Grund" nur zeigen, wenn er etwas aussagt: ein verbindlicher
+           // Stand vor dem Speichern oder bei Sitzungsverlust ist eine
+           // Information, "automatisch" ist der Normalfall und damit Rauschen.
+           ((s.reason && s.reason !== 'automatisch' && s.reason !== 'automatic')
+             ? '<div style="margin-top:3px;color:#888;font-size:11px;">Grund: ' + esc(s.reason) + '</div>'
+             : '') +
            // Der Hauptknopf steht bewusst direkt auf der Karte: im Ernstfall
            // will man zurueckschreiben, nicht erst aufklappen.
            (function () {
