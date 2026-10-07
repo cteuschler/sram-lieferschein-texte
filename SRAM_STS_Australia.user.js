@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      4.4
+// @version      4.5
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -19,7 +19,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '4.4';
+const SCRIPT_VERSION = '4.5';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js';
 
 function compareVersions(a, b) {
@@ -650,6 +650,36 @@ function allDocsSafe() {
   return docs;
 }
 
+
+// Distance from the bottom of the window to the TOP of the footer bar.
+// Watch the reference frame: the bar lives inside the app iframe, the
+// panels live in the top window. The bar height alone is NOT enough - in
+// testing the iframe sat 100px lower and ended 8px above the window
+// bottom, so a panel with bottom = barHeight ended up inside the bar.
+function footerGap() {
+  try {
+    const z = findOrderFooter();
+    if (!z) return 0;
+    const dom = z.tb.getDomRef();
+    if (!dom) return 0;
+    const r = dom.getBoundingClientRect();
+    if (!r.height) return 0;
+    let versatz = 0;
+    try {
+      const w = window.top;
+      if (z.w !== w) {
+        const rahmen = Array.prototype.find.call(
+          w.document.querySelectorAll('iframe'),
+          fr => { try { return fr.contentWindow === z.w; } catch (e) { return false; } });
+        if (rahmen) versatz = rahmen.getBoundingClientRect().top;
+      }
+      const oben = versatz + r.top;
+      const abstand = Math.round(w.innerHeight - oben);
+      return (abstand > 0 && abstand < w.innerHeight * 0.5) ? abstand : Math.round(r.height);
+    } catch (e) { return Math.round(r.height); }
+  } catch (e) { return 0; }
+}
+
 function findOrderFooter() {
   for (const doc of allDocsSafe()) {
     try {
@@ -775,7 +805,7 @@ function buildPanel() {
   if (panel) panel.remove();
   panel = document.createElement('div');
   panel.id = 'sram-panel';
-  panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:440px;background:#FFFFFF;border-left:3px solid #E31836;z-index:2147483647;display:flex;flex-direction:column;font-family:Arial,Helvetica,sans-serif;font-size:13px;box-shadow:-6px 0 24px rgba(0,0,0,0.18);color:#312929;';
+  panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:440px;background:#FFFFFF;border-left:3px solid #E31836;border-bottom:3px solid #E31836;border-radius:8px 0 0 8px;overflow:hidden;z-index:2147483647;display:flex;flex-direction:column;font-family:Arial,Helvetica,sans-serif;font-size:13px;box-shadow:-6px 0 24px rgba(0,0,0,0.18);color:#312929;';
 
   // CRITICAL: prevent all mousedown events inside panel from stealing focus from SAP fields
   // AND: prevent clicks in the panel from bubbling up to document.
@@ -822,6 +852,8 @@ function buildPanel() {
   `;
 
   document.body.appendChild(panel);
+  // End above the footer bar so the buttons stay visible
+  try { panel.style.bottom = (footerGap() + 10) + 'px'; } catch (e) {}
 
   // Check once on open whether a newer version is available
   checkForUpdate((newerVersion) => {
@@ -1085,6 +1117,7 @@ function render() { renderCats(); renderTypes(); renderResults(); }
 function placeTextsButton() {
   if (!IS_TOP_FRAME) return;
   ensureFooterButton('sramTexts', 'Texts', function () { togglePanel(); }, 'right');
+  if (panel) { try { panel.style.bottom = (footerGap() + 10) + 'px'; } catch (e) {} }
   const alt = document.getElementById('sram-launcher');
   if (alt) { try { alt.remove(); } catch (e) {} }
 }
@@ -1967,6 +2000,36 @@ function allDocsSafe() {
   return docs;
 }
 
+
+// Distance from the bottom of the window to the TOP of the footer bar.
+// Watch the reference frame: the bar lives inside the app iframe, the
+// panels live in the top window. The bar height alone is NOT enough - in
+// testing the iframe sat 100px lower and ended 8px above the window
+// bottom, so a panel with bottom = barHeight ended up inside the bar.
+function footerGap() {
+  try {
+    const z = findOrderFooter();
+    if (!z) return 0;
+    const dom = z.tb.getDomRef();
+    if (!dom) return 0;
+    const r = dom.getBoundingClientRect();
+    if (!r.height) return 0;
+    let versatz = 0;
+    try {
+      const w = window.top;
+      if (z.w !== w) {
+        const rahmen = Array.prototype.find.call(
+          w.document.querySelectorAll('iframe'),
+          fr => { try { return fr.contentWindow === z.w; } catch (e) { return false; } });
+        if (rahmen) versatz = rahmen.getBoundingClientRect().top;
+      }
+      const oben = versatz + r.top;
+      const abstand = Math.round(w.innerHeight - oben);
+      return (abstand > 0 && abstand < w.innerHeight * 0.5) ? abstand : Math.round(r.height);
+    } catch (e) { return Math.round(r.height); }
+  } catch (e) { return 0; }
+}
+
 function findOrderFooter() {
   for (const doc of allDocsSafe()) {
     try {
@@ -2088,6 +2151,8 @@ function buildPanel() {
   }));
 
   document.body.appendChild(panel);
+  // Start above the footer bar or above the floating button
+  try { const h = footerGap(); panel.style.bottom = (h ? h + 8 : 122) + 'px'; } catch (e) {}
   document.getElementById('sram-bk-x').addEventListener('click', () => { panel.remove(); panel = null; });
   renderBody();
 }
@@ -3085,6 +3150,7 @@ setTimeout(() => { try { snapshotNow('automatic'); } catch (e) {} }, 2500);
 function placeBackupButton() {
   if (!IS_TOP) return;
   const inBar = ensureFooterButton('sramBackup', 'Backup', function () { togglePanel(); }, 'left');
+  if (panel) { try { const h = footerGap(); panel.style.bottom = (h ? h + 8 : 122) + 'px'; } catch (e) {} }
   const floating = document.getElementById('sram-bk-launcher');
   if (inBar) { if (floating) { try { floating.remove(); } catch (e) {} } }
   else if (!floating) { createLauncher(); }
