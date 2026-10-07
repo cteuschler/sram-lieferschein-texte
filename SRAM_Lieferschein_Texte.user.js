@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      4.1
+// @version      4.2
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -29,7 +29,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '4.1';
+const SCRIPT_VERSION = '4.2';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -848,10 +848,24 @@ function checkForUpdate(onResult) {
     });
 }
 
+// Panel schliessen und dabei die Filter zuruecksetzen.
+//
+// Vorher blieb ein Suchbegriff im Zustand stehen, waehrend das Suchfeld
+// beim naechsten Oeffnen leer gerendert wurde: die Liste war gefiltert,
+// ohne dass man den Grund sehen konnte. Beide Schliesswege (X-Knopf und
+// Umschalten ueber den Launcher) laufen jetzt hierdurch, damit sie sich
+// nicht unterschiedlich verhalten.
+function closePanel() {
+  state.q = '';
+  state.cat = 'all';
+  state.type = 'all';
+  state.open = null;
+  hideTooltip();
+  if (panel) { panel.remove(); panel = null; }
+}
+
 function togglePanel() {
-  if (document.getElementById('sram-panel')) {
-    panel.remove(); panel = null; return;
-  }
+  if (document.getElementById('sram-panel')) { closePanel(); return; }
   buildPanel();
 }
 
@@ -929,7 +943,7 @@ function buildPanel() {
 
   document.body.appendChild(panel);
 
-  document.getElementById('sram-x').addEventListener('click', () => { panel.remove(); panel = null; hideTooltip(); });
+  document.getElementById('sram-x').addEventListener('click', closePanel);
   document.getElementById('sram-results').addEventListener('scroll', hideTooltip);
 
   // Sprachschalter
@@ -2082,7 +2096,7 @@ function createLauncher() {
     '<span id="sram-bk-badge" style="background:#fff;color:#E31836;border-radius:9px;padding:0 5px;font-size:10px;font-weight:700;">0</span>';
   // Position bewusst hoeher als die Portal-Leiste: bei der Auftragserstellung
   // sitzt unten links der Reset-Knopf, den darf der Backup-Knopf nicht verdecken.
-  btn.style.cssText = 'position:fixed;left:20px;bottom:140px;z-index:2147483000;background:#E31836;color:#fff;border:none;border-radius:4px;' +
+  btn.style.cssText = 'position:fixed;left:20px;bottom:80px;z-index:2147483000;background:#E31836;color:#fff;border:none;border-radius:4px;' +
     'display:flex;align-items:center;gap:7px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;' +
     'font-family:Arial,Helvetica,sans-serif;box-shadow:0 3px 14px rgba(0,0,0,0.28);letter-spacing:0.02em;';
   ['mousedown', 'pointerdown', 'touchstart'].forEach(ev => btn.addEventListener(ev, e => { e.stopPropagation(); if (ev === 'mousedown') e.preventDefault(); }));
@@ -2111,7 +2125,7 @@ function togglePanel() {
 function buildPanel() {
   panel = document.createElement('div');
   panel.id = 'sram-bk-panel';
-  panel.style.cssText = 'position:fixed;left:20px;bottom:182px;width:460px;max-height:70vh;z-index:2147483001;background:#fff;' +
+  panel.style.cssText = 'position:fixed;left:20px;bottom:122px;width:460px;max-height:70vh;z-index:2147483001;background:#fff;' +
     'border:1px solid #D0D0D0;border-radius:6px;box-shadow:0 8px 28px rgba(0,0,0,.28);display:flex;flex-direction:column;' +
     'font-family:Arial,Helvetica,sans-serif;color:#312929;overflow:hidden;';
   panel.innerHTML =
