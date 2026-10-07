@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      4.3
+// @version      4.4
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -19,7 +19,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '4.3';
+const SCRIPT_VERSION = '4.4';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js';
 
 function compareVersions(a, b) {
@@ -3094,6 +3094,11 @@ if (IS_TOP) {
   const start = () => { try { placeBackupButton(); } catch (e) { log('UI error:', e); } };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
+  // The portal is a single page application: the footer toolbar appears
+  // and disappears without a reload. Without this repeated check the
+  // button was only placed once - before the toolbar existed.
+  setInterval(start, 1500);
+  window.addEventListener('hashchange', () => setTimeout(start, 600));
   // Panel regelmaessig aktualisieren, solange es offen ist
   setInterval(() => {
     if (!panel) return;
