@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      4.2
+// @version      4.5
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -29,7 +29,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '4.2';
+const SCRIPT_VERSION = '4.5';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -767,6 +767,99 @@ function getTypes() {
 }
 
 // ── Floating launcher button ──────────────────────
+
+function allDocsSafe() { try { return allDocs(); } catch (e) { return [document]; } }
+
+// ── Knopf in die Fussleiste des Auftrags einsetzen ──────────────────
+// Die Auftragsmaske hat unten eine sap.m.OverflowToolbar mit der
+// ID-Endung "--orderFooter": links "Reset Order", rechts "Hold for
+// later" und "Save", dazwischen ein Abstandhalter.
+//
+// Eingesetzt wird der Knopf als Control in die Aggregation der Leiste,
+// nicht als loses HTML-Element im Dokument. Grund: SAPUI5 baut die
+// Leiste bei jeder Statusaenderung neu auf - loses HTML waere danach
+// weg, ein Control in der Aggregation ueberlebt das.
+//
+// Position: direkt vor dem Abstandhalter, also links und hinter
+// "Reset Order". Der Reset-Knopf ist meist ausgeblendet, aber wenn er
+// da ist, soll er zuerst kommen.
+function findOrderFooter() {
+  for (const doc of allDocsSafe()) {
+    try {
+      const w = doc.defaultView;
+      if (!(w && w.sap && w.sap.ui && w.sap.ui.core && w.sap.ui.core.Element)) continue;
+      const all = w.sap.ui.core.Element.registry.all();
+      for (const id in all) {
+        if (!/--orderFooter$/.test(id)) continue;
+        const tb = all[id];
+        if (tb.getContent && tb.getDomRef && tb.getDomRef()) return { tb: tb, w: w };
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+function footerInsertIndex(tb) {
+  const inhalt = tb.getContent() || [];
+  for (let i = 0; i < inhalt.length; i++) {
+    try { if (/ToolbarSpacer$/.test(inhalt[i].getMetadata().getName())) return i; } catch (e) {}
+  }
+  return inhalt.length;
+}
+
+// Legt einen Knopf in der Leiste an, falls noch keiner mit dieser
+// Kennung existiert. Gibt true zurueck, wenn er (jetzt) dort sitzt.
+// seite: 'links'  -> vor dem Abstandhalter, also bei "Reset Order"
+//        'rechts' -> direkt hinter dem Abstandhalter, also bei "Edit",
+//                    "Hold for later" und "Save"
+// Der Index wird bei jedem Einfuegen neu ermittelt, weil sich der
+// Abstandhalter verschiebt, sobald links ein Knopf dazukommt.
+function ensureFooterButton(kennung, beschriftung, beiKlick, seite) {
+  const ziel = findOrderFooter();
+  if (!ziel) return false;
+  const vorhanden = (ziel.tb.getContent() || []).some(c => {
+    try { return c.data && c.data('sramTag') === kennung; } catch (e) { return false; }
+  });
+  if (vorhanden) return true;
+
+  // Bewusst sap.ui.core.HTML und NICHT sap.m.Button:
+  // Ein sap.m.Button laesst sich nur ueber Stilregeln umfaerben, und
+  // SAPUI5 setzt dabei Groesse und Innenabstaende durch - im ersten
+  // Versuch blieb das Logo winzig und der Text klebte am Rand. Mit
+  // eigenem HTML sieht der Knopf genauso aus wie der schwebende.
+  // Als Control in der Aggregation ueberlebt er trotzdem das
+  // Neuzeichnen der Leiste.
+  try {
+    const stil = 'display:inline-flex;align-items:center;gap:7px;background:#E31836;color:#fff;'
+      + 'border:none;border-radius:4px;padding:7px 13px;font-size:12px;font-weight:600;'
+      + 'cursor:pointer;font-family:Arial,Helvetica,sans-serif;letter-spacing:0.02em;'
+      + 'line-height:1;margin:0 4px;vertical-align:middle;';
+    const html = '<button type="button" data-sram-tag="' + kennung + '" style="' + stil + '">'
+      + '<img src="data:image/png;base64,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" alt="SRAM" '
+      + 'style="height:11px;width:auto;flex-shrink:0;display:block;" />'
+      + '<span>' + beschriftung + '</span></button>';
+
+    const ctrl = new ziel.w.sap.ui.core.HTML({ content: html });
+    ctrl.data('sramTag', kennung);
+    ctrl.attachEvent('afterRendering', function () {
+      try {
+        const dom = ctrl.getDomRef();
+        const b = (dom && dom.tagName === 'BUTTON') ? dom
+                : (dom && dom.querySelector ? dom.querySelector('button') : null);
+        if (!b || b.dataset.sramWired) return;
+        b.dataset.sramWired = '1';
+        ['mousedown', 'pointerdown', 'touchstart'].forEach(ev =>
+          b.addEventListener(ev, e => { e.stopPropagation(); if (ev === 'mousedown') e.preventDefault(); }));
+        b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); beiKlick(); });
+      } catch (e) {}
+    });
+
+    const pos = footerInsertIndex(ziel.tb) + (seite === 'rechts' ? 1 : 0);
+    ziel.tb.insertContent(ctrl, pos);
+    return true;
+  } catch (e) { return false; }
+}
+
 function createLauncher() {
   const existing = document.getElementById('sram-launcher');
   if (existing) {
@@ -783,8 +876,9 @@ function createLauncher() {
   const btn = document.createElement('button');
   btn.id = 'sram-launcher';
   btn.dataset.sramBuild = SCRIPT_VERSION;
-  btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1" y="4" width="14" height="2" fill="white"/><rect x="1" y="8" width="10" height="2" fill="white"/><rect x="1" y="12" width="7" height="2" fill="white"/></svg><span style="font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:600">Texte</span>`;
-  btn.style.cssText = 'position:fixed;bottom:80px;right:20px;z-index:2147483646;display:flex;align-items:center;gap:8px;padding:9px 16px;background:#E31836;color:#fff;border:none;border-radius:4px;cursor:pointer;box-shadow:0 3px 14px rgba(0,0,0,0.28);letter-spacing:0.02em;';
+  btn.innerHTML = '<img src="data:image/png;base64,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" alt="SRAM" style="height:11px;width:auto;flex-shrink:0;display:block;" />' +
+    '<span>Texte</span>';
+  btn.style.cssText = 'position:fixed;bottom:80px;right:20px;z-index:2147483000;background:#E31836;color:#fff;border:none;border-radius:4px;display:flex;align-items:center;gap:7px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;font-family:Arial,Helvetica,sans-serif;box-shadow:0 3px 14px rgba(0,0,0,0.28);letter-spacing:0.02em;';
 
   // CRITICAL: prevent mousedown so SAP field keeps focus, and stop it from bubbling
   // to document (siehe Erklärung im Panel-Handler weiter unten)
@@ -1209,12 +1303,25 @@ function render() { renderCats(); renderTypes(); renderResults(); }
 
 // Only create the launcher/panel in the TOP frame.
 // iframe instances of this script only do focus tracking (above).
+// Die Textbausteine werden nur INNERHALB eines Auftrags gebraucht.
+// Deshalb erscheint der Knopf ausschliesslich in der Fussleiste der
+// Auftragsmaske - ausserhalb gibt es ihn nicht. Das Portal ist eine
+// Einzelseiten-Anwendung, die Leiste kommt und geht also ohne Neuladen.
+// Darum wird regelmaessig geprueft, ob sie da ist.
+function platziereTexteKnopf() {
+  if (!IS_TOP_FRAME) return;
+  ensureFooterButton('sramTexts', 'Texte', function () { togglePanel(); }, 'rechts');
+  // Schwebenden Knopf einer aelteren Fassung aufraeumen
+  const alt = document.getElementById('sram-launcher');
+  if (alt) { try { alt.remove(); } catch (e) {} }
+}
+
 if (IS_TOP_FRAME) {
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', createLauncher);
-  } else {
-    createLauncher();
-  }
+  const start = () => { try { platziereTexteKnopf(); } catch (e) {} };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+  setInterval(start, 1500);
+  window.addEventListener('hashchange', () => setTimeout(start, 600));
 }
 
 // Sicherheitsnetz: laedt eine aeltere Version erst NACH dieser, wuerde sie
@@ -2085,6 +2192,104 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+
+function allDocsSafe() {
+  try { const api = fieldApi(); if (api && api.allDocs) return api.allDocs(); } catch (e) {}
+  const docs = [document];
+  try { document.querySelectorAll('iframe').forEach(fr => { try { if (fr.contentDocument) docs.push(fr.contentDocument); } catch (e) {} }); } catch (e) {}
+  return docs;
+}
+
+// ── Knopf in die Fussleiste des Auftrags einsetzen ──────────────────
+// Die Auftragsmaske hat unten eine sap.m.OverflowToolbar mit der
+// ID-Endung "--orderFooter": links "Reset Order", rechts "Hold for
+// later" und "Save", dazwischen ein Abstandhalter.
+//
+// Eingesetzt wird der Knopf als Control in die Aggregation der Leiste,
+// nicht als loses HTML-Element im Dokument. Grund: SAPUI5 baut die
+// Leiste bei jeder Statusaenderung neu auf - loses HTML waere danach
+// weg, ein Control in der Aggregation ueberlebt das.
+//
+// Position: direkt vor dem Abstandhalter, also links und hinter
+// "Reset Order". Der Reset-Knopf ist meist ausgeblendet, aber wenn er
+// da ist, soll er zuerst kommen.
+function findOrderFooter() {
+  for (const doc of allDocsSafe()) {
+    try {
+      const w = doc.defaultView;
+      if (!(w && w.sap && w.sap.ui && w.sap.ui.core && w.sap.ui.core.Element)) continue;
+      const all = w.sap.ui.core.Element.registry.all();
+      for (const id in all) {
+        if (!/--orderFooter$/.test(id)) continue;
+        const tb = all[id];
+        if (tb.getContent && tb.getDomRef && tb.getDomRef()) return { tb: tb, w: w };
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+function footerInsertIndex(tb) {
+  const inhalt = tb.getContent() || [];
+  for (let i = 0; i < inhalt.length; i++) {
+    try { if (/ToolbarSpacer$/.test(inhalt[i].getMetadata().getName())) return i; } catch (e) {}
+  }
+  return inhalt.length;
+}
+
+// Legt einen Knopf in der Leiste an, falls noch keiner mit dieser
+// Kennung existiert. Gibt true zurueck, wenn er (jetzt) dort sitzt.
+// seite: 'links'  -> vor dem Abstandhalter, also bei "Reset Order"
+//        'rechts' -> direkt hinter dem Abstandhalter, also bei "Edit",
+//                    "Hold for later" und "Save"
+// Der Index wird bei jedem Einfuegen neu ermittelt, weil sich der
+// Abstandhalter verschiebt, sobald links ein Knopf dazukommt.
+function ensureFooterButton(kennung, beschriftung, beiKlick, seite) {
+  const ziel = findOrderFooter();
+  if (!ziel) return false;
+  const vorhanden = (ziel.tb.getContent() || []).some(c => {
+    try { return c.data && c.data('sramTag') === kennung; } catch (e) { return false; }
+  });
+  if (vorhanden) return true;
+
+  // Bewusst sap.ui.core.HTML und NICHT sap.m.Button:
+  // Ein sap.m.Button laesst sich nur ueber Stilregeln umfaerben, und
+  // SAPUI5 setzt dabei Groesse und Innenabstaende durch - im ersten
+  // Versuch blieb das Logo winzig und der Text klebte am Rand. Mit
+  // eigenem HTML sieht der Knopf genauso aus wie der schwebende.
+  // Als Control in der Aggregation ueberlebt er trotzdem das
+  // Neuzeichnen der Leiste.
+  try {
+    const stil = 'display:inline-flex;align-items:center;gap:7px;background:#E31836;color:#fff;'
+      + 'border:none;border-radius:4px;padding:7px 13px;font-size:12px;font-weight:600;'
+      + 'cursor:pointer;font-family:Arial,Helvetica,sans-serif;letter-spacing:0.02em;'
+      + 'line-height:1;margin:0 4px;vertical-align:middle;';
+    const html = '<button type="button" data-sram-tag="' + kennung + '" style="' + stil + '">'
+      + '<img src="data:image/png;base64,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" alt="SRAM" '
+      + 'style="height:11px;width:auto;flex-shrink:0;display:block;" />'
+      + '<span>' + beschriftung + '</span></button>';
+
+    const ctrl = new ziel.w.sap.ui.core.HTML({ content: html });
+    ctrl.data('sramTag', kennung);
+    ctrl.attachEvent('afterRendering', function () {
+      try {
+        const dom = ctrl.getDomRef();
+        const b = (dom && dom.tagName === 'BUTTON') ? dom
+                : (dom && dom.querySelector ? dom.querySelector('button') : null);
+        if (!b || b.dataset.sramWired) return;
+        b.dataset.sramWired = '1';
+        ['mousedown', 'pointerdown', 'touchstart'].forEach(ev =>
+          b.addEventListener(ev, e => { e.stopPropagation(); if (ev === 'mousedown') e.preventDefault(); }));
+        b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); beiKlick(); });
+      } catch (e) {}
+    });
+
+    const pos = footerInsertIndex(ziel.tb) + (seite === 'rechts' ? 1 : 0);
+    ziel.tb.insertContent(ctrl, pos);
+    return true;
+  } catch (e) { return false; }
+}
+
 function createLauncher() {
   if (document.getElementById('sram-bk-launcher')) return;
   const btn = document.createElement('button');
@@ -2208,7 +2413,12 @@ function renderBody() {
       h += '<div style="border:1px solid ' + rahmen + ';border-left:3px solid ' + kante +
            ';border-radius:4px;padding:9px;margin-bottom:8px;background:' + grund + ';">' +
            '<div style="display:flex;align-items:baseline;gap:6px;">' +
-             '<b style="font-size:13px;">Auftrag ' + esc(s.order) + '</b>' +
+             // Auftragsnummer anklickbar: springt direkt in den Auftrag.
+             // Nuetzlich vor allem ausserhalb eines Auftrags - von der
+             // Startseite aus kommt man so zu dem Auftrag, dessen
+             // Sicherung man braucht.
+             '<b style="font-size:13px;">Auftrag <a href="#" class="sram-bk-goto" data-nr="' + esc(s.order) +
+             '" style="color:#E31836;text-decoration:underline;">' + esc(s.order) + '</a></b>' +
              '<span style="color:#777;font-size:11px;">' + fmtAge(s.ts) + '</span>' +
              (sessionLost ? '<span style="margin-left:auto;background:#B4780D;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;" title="' + fmtAge(s.saveState.at) + '">Sitzung abgelaufen ' + fmtAge(s.saveState.at) + '</span>'
                  : failed ? '<span style="margin-left:auto;background:#C62828;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;">Speichern fehlgeschlagen ' + fmtAge(s.saveState.at) + '</span>'
@@ -2340,6 +2550,8 @@ function renderBody() {
       setTimeout(() => { b.textContent = 'Als Text kopieren'; }, 2500);
     }).catch(() => { b.textContent = '✖ nicht möglich'; });
   }));
+
+  wireGoto(body);
 
   // Hauptknopf jeder Karte verdrahten
   body.querySelectorAll('.sram-bk-restore-all').forEach(b => {
@@ -2802,6 +3014,43 @@ function restoreCorrespondence(snap, fertig) {
 // verlaessliche Weg: Nachrichten lassen sich nicht automatisch abschicken
 // (dafuer muesste "Ok" gedrueckt werden), kopieren und selbst einfuegen
 // funktioniert dagegen immer.
+// Springt in einen Auftrag. Das Portal nutzt eine Adresse mit Raute,
+// die sich aus der Auftragsnummer bauen laesst. Zuerst wird nur der
+// Teil hinter der Raute gesetzt - dann wechselt das Portal die Maske
+// ohne Neuladen. Klappt das nicht, folgt ein vollstaendiger Aufruf.
+function gotoOrder(nr) {
+  const ziel = 'https://b2b.sram.com/site#ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
+               '&sap-app-origin-hint=saas_approuter&/orderentry?editing=false';
+  try {
+    const w = window.top;
+    // Warnen, wenn ein ANDERER Auftrag offen ist und Inhalt hat -
+    // der Wechsel wuerde dessen nicht gespeicherte Eingaben verwerfen.
+    const st = lsGet(KEY_STATUS, null);
+    if (st && st.found && String(st.order) !== String(nr)) {
+      const offeneTexte = st.textLens ? (st.textLens.IntMemo + st.textLens.ShipNote + st.textLens.HeadNote) : 0;
+      if (offeneTexte > 0 || (st.itemCount || 0) > 0) {
+        if (!w.confirm('Auftrag ' + st.order + ' ist gerade geoeffnet.\n\n' +
+              'Beim Wechsel zu ' + nr + ' gehen dort nicht gespeicherte Eingaben verloren.\n' +
+              'Gesichert sind sie weiterhin in diesem Fenster.\n\nWechseln?')) return;
+      }
+    }
+    const hash = ziel.split('#')[1];
+    if (w.location.hostname.indexOf('b2b.sram.com') >= 0) w.location.hash = hash;
+    else w.location.href = ziel;
+  } catch (e) {
+    try { window.top.location.href = ziel; } catch (e2) {}
+  }
+}
+
+function wireGoto(wurzel) {
+  wurzel.querySelectorAll('.sram-bk-goto').forEach(a => {
+    if (a.dataset.verdrahtet) return;
+    a.dataset.verdrahtet = '1';
+    a.addEventListener('mousedown', e => e.preventDefault());
+    a.addEventListener('click', e => { e.preventDefault(); gotoOrder(a.getAttribute('data-nr')); });
+  });
+}
+
 function wireCopy(box, key) {
   box.querySelectorAll('.sram-bk-copykorr').forEach(b => {
     if (b.dataset.verdrahtet) return;
@@ -3099,10 +3348,27 @@ setInterval(() => { try { snapshotNow('automatisch'); } catch (e) {} }, SNAP_INT
 setTimeout(() => { try { snapshotNow('automatisch'); } catch (e) {} }, 2500);
 
 // Oberflaeche nur im obersten Fenster
+// Die Sicherung ist auch AUSSERHALB eines Auftrags nuetzlich: von dort
+// kommt man ueber die Auftragsnummer direkt in den Auftrag. Deshalb:
+// in der Auftragsmaske sitzt der Knopf in der Fussleiste, ausserhalb
+// bleibt er schwebend an der gewohnten Stelle.
+function platziereBackupKnopf() {
+  if (!IS_TOP) return;
+  const inLeiste = ensureFooterButton('sramBackup', 'Backup', function () { togglePanel(); }, 'links');
+  const schwebend = document.getElementById('sram-bk-launcher');
+  if (inLeiste) {
+    if (schwebend) { try { schwebend.remove(); } catch (e) {} }
+  } else if (!schwebend) {
+    createLauncher();
+  }
+}
+
 if (IS_TOP) {
-  const start = () => { try { createLauncher(); } catch (e) { log('UI-Fehler:', e); } };
+  const start = () => { try { platziereBackupKnopf(); } catch (e) { log('UI-Fehler:', e); } };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
+  setInterval(start, 1500);
+  window.addEventListener('hashchange', () => setTimeout(start, 600));
   // Panel regelmaessig aktualisieren, solange es offen ist
   setInterval(() => {
     if (!panel) return;
