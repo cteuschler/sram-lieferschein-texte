@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      4.5
+// @version      4.8
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -29,7 +29,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '4.5';
+const SCRIPT_VERSION = '4.8';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -783,6 +783,41 @@ function allDocsSafe() { try { return allDocs(); } catch (e) { return [document]
 // Position: direkt vor dem Abstandhalter, also links und hinter
 // "Reset Order". Der Reset-Knopf ist meist ausgeblendet, aber wenn er
 // da ist, soll er zuerst kommen.
+
+// Abstand vom unteren Fensterrand bis zur OBERKANTE der Fussleiste.
+//
+// Achtung Bezugspunkt: Die Leiste liegt im App-iframe, die Panels liegen
+// im Hauptfenster. Die Hoehe der Leiste allein genuegt deshalb NICHT -
+// im Test sass der iframe 100 Pixel tiefer und endete 8 Pixel ueber dem
+// Fensterrand. Ein Panel mit bottom = Leistenhoehe (40) endete dadurch
+// mitten in der Leiste und verdeckte die Knoepfe halb.
+// Darum wird die Leistenposition in Fensterkoordinaten umgerechnet.
+function footerGap() {
+  try {
+    const z = findOrderFooter();
+    if (!z) return 0;
+    const dom = z.tb.getDomRef();
+    if (!dom) return 0;
+    const r = dom.getBoundingClientRect();
+    if (!r.height) return 0;
+
+    // Versatz des iframes im Hauptfenster ermitteln
+    let versatz = 0;
+    try {
+      const w = window.top;
+      if (z.w !== w) {
+        const rahmen = Array.prototype.find.call(
+          w.document.querySelectorAll('iframe'),
+          fr => { try { return fr.contentWindow === z.w; } catch (e) { return false; } });
+        if (rahmen) versatz = rahmen.getBoundingClientRect().top;
+      }
+      const oben = versatz + r.top;                  // Oberkante in Fensterkoordinaten
+      const abstand = Math.round(w.innerHeight - oben);
+      return (abstand > 0 && abstand < w.innerHeight * 0.5) ? abstand : Math.round(r.height);
+    } catch (e) { return Math.round(r.height); }
+  } catch (e) { return 0; }
+}
+
 function findOrderFooter() {
   for (const doc of allDocsSafe()) {
     try {
@@ -988,7 +1023,7 @@ function buildPanel() {
   if (panel) panel.remove();
   panel = document.createElement('div');
   panel.id = 'sram-panel';
-  panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:440px;background:#FFFFFF;border-left:3px solid #E31836;z-index:2147483647;display:flex;flex-direction:column;font-family:Arial,Helvetica,sans-serif;font-size:13px;box-shadow:-6px 0 24px rgba(0,0,0,0.18);color:#312929;';
+  panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:440px;background:#FFFFFF;border-left:3px solid #E31836;border-bottom:3px solid #E31836;border-radius:8px 0 0 8px;overflow:hidden;z-index:2147483647;display:flex;flex-direction:column;font-family:Arial,Helvetica,sans-serif;font-size:13px;box-shadow:-6px 0 24px rgba(0,0,0,0.18);color:#312929;';
 
   // CRITICAL: prevent all mousedown events inside panel from stealing focus from SAP fields
   // UND: verhindern, dass Klicks im Panel bis zum document durchbubbeln.
@@ -1036,6 +1071,8 @@ function buildPanel() {
   `;
 
   document.body.appendChild(panel);
+  // Oberhalb der Fussleiste enden, damit die Knoepfe sichtbar bleiben
+  try { panel.style.bottom = (footerGap() + 10) + 'px'; } catch (e) {}
 
   document.getElementById('sram-x').addEventListener('click', closePanel);
   document.getElementById('sram-results').addEventListener('scroll', hideTooltip);
@@ -1311,6 +1348,8 @@ function render() { renderCats(); renderTypes(); renderResults(); }
 function platziereTexteKnopf() {
   if (!IS_TOP_FRAME) return;
   ensureFooterButton('sramTexts', 'Texte', function () { togglePanel(); }, 'rechts');
+  // Offenes Panel mitziehen, falls die Leiste erst jetzt auftaucht
+  if (panel) { try { panel.style.bottom = (footerGap() + 10) + 'px'; } catch (e) {} }
   // Schwebenden Knopf einer aelteren Fassung aufraeumen
   const alt = document.getElementById('sram-launcher');
   if (alt) { try { alt.remove(); } catch (e) {} }
@@ -2213,6 +2252,41 @@ function allDocsSafe() {
 // Position: direkt vor dem Abstandhalter, also links und hinter
 // "Reset Order". Der Reset-Knopf ist meist ausgeblendet, aber wenn er
 // da ist, soll er zuerst kommen.
+
+// Abstand vom unteren Fensterrand bis zur OBERKANTE der Fussleiste.
+//
+// Achtung Bezugspunkt: Die Leiste liegt im App-iframe, die Panels liegen
+// im Hauptfenster. Die Hoehe der Leiste allein genuegt deshalb NICHT -
+// im Test sass der iframe 100 Pixel tiefer und endete 8 Pixel ueber dem
+// Fensterrand. Ein Panel mit bottom = Leistenhoehe (40) endete dadurch
+// mitten in der Leiste und verdeckte die Knoepfe halb.
+// Darum wird die Leistenposition in Fensterkoordinaten umgerechnet.
+function footerGap() {
+  try {
+    const z = findOrderFooter();
+    if (!z) return 0;
+    const dom = z.tb.getDomRef();
+    if (!dom) return 0;
+    const r = dom.getBoundingClientRect();
+    if (!r.height) return 0;
+
+    // Versatz des iframes im Hauptfenster ermitteln
+    let versatz = 0;
+    try {
+      const w = window.top;
+      if (z.w !== w) {
+        const rahmen = Array.prototype.find.call(
+          w.document.querySelectorAll('iframe'),
+          fr => { try { return fr.contentWindow === z.w; } catch (e) { return false; } });
+        if (rahmen) versatz = rahmen.getBoundingClientRect().top;
+      }
+      const oben = versatz + r.top;                  // Oberkante in Fensterkoordinaten
+      const abstand = Math.round(w.innerHeight - oben);
+      return (abstand > 0 && abstand < w.innerHeight * 0.5) ? abstand : Math.round(r.height);
+    } catch (e) { return Math.round(r.height); }
+  } catch (e) { return 0; }
+}
+
 function findOrderFooter() {
   for (const doc of allDocsSafe()) {
     try {
@@ -2350,6 +2424,8 @@ function buildPanel() {
   }));
 
   document.body.appendChild(panel);
+  // Oberhalb der Fussleiste bzw. des schwebenden Knopfes beginnen
+  try { const h = footerGap(); panel.style.bottom = (h ? h + 8 : 122) + 'px'; } catch (e) {}
   document.getElementById('sram-bk-x').addEventListener('click', () => { panel.remove(); panel = null; });
   renderBody();
 }
@@ -3355,6 +3431,7 @@ setTimeout(() => { try { snapshotNow('automatisch'); } catch (e) {} }, 2500);
 function platziereBackupKnopf() {
   if (!IS_TOP) return;
   const inLeiste = ensureFooterButton('sramBackup', 'Backup', function () { togglePanel(); }, 'links');
+  if (panel) { try { const h = footerGap(); panel.style.bottom = (h ? h + 8 : 122) + 'px'; } catch (e) {} }
   const schwebend = document.getElementById('sram-bk-launcher');
   if (inLeiste) {
     if (schwebend) { try { schwebend.remove(); } catch (e) {} }
