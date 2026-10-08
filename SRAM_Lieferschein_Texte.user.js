@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      5.1
+// @version      5.1.1
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -31,7 +31,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '5.1';
+const SCRIPT_VERSION = '5.1.1';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -202,10 +202,10 @@ function updateLangButtons() {
 const IS_TOP_FRAME = (window === window.top);
 
 try {
-  if (!window.top._sramShared) window.top._sramShared = { lastFocused: null, pinnedField: null, pinnedMode: null };
+  if (!window.top._sramShared) window.top._sramShared = { lastFocused: null, pinnedField: null, pinnedMode: null, pinnedLabel: null };
 } catch(e) {
   // Cross-origin top frame — shouldn't happen on SAP portal, but handle gracefully
-  window._sramShared = { lastFocused: null, pinnedField: null, pinnedMode: null };
+  window._sramShared = { lastFocused: null, pinnedField: null, pinnedMode: null, pinnedLabel: null };
 }
 
 function getShared() {
@@ -219,6 +219,14 @@ function getPinnedMode()   { return getShared().pinnedMode; }
 function setLastFocused(el) { try { window.top._sramShared.lastFocused = el; } catch(e) {} }
 function setPinnedField(el) { try { window.top._sramShared.pinnedField = el; } catch(e) {} }
 function setPinnedMode(mode) { try { window.top._sramShared.pinnedMode = mode; } catch(e) {} }
+
+// Beschriftung des angepinnten Zielfelds. Ohne sie liess sich beim
+// Neuaufbau des Panels nicht rekonstruieren, WELCHER Knopf hervorgehoben
+// werden muss - das Feld selbst kennt seine Knopf-Beschriftung nicht.
+// Dadurch war nach Schliessen und Oeffnen das Feld noch angepinnt, der
+// Knopf aber nicht mehr markiert.
+function getPinnedLabel() { return getShared().pinnedLabel; }
+function setPinnedLabel(lbl) { try { window.top._sramShared.pinnedLabel = lbl; } catch(e) {} }
 
 // ── Determine if an element is an editable SAP/HTML field ──
 function isEditableField(el) {
@@ -591,6 +599,7 @@ function clickWriteMessageAndPin() {
       if (field) {
         setPinnedField(field);
         setPinnedMode('correspondence');
+        setPinnedLabel('Correspondence');
         setActiveFieldButton('Correspondence');
         setHint('✓ Zielfeld gesetzt: Correspondence (Write-Message-Dialog)', '#1D9E75');
       }
@@ -1076,6 +1085,29 @@ function buildPanel() {
   // Oberhalb der Fussleiste enden, damit die Knoepfe sichtbar bleiben
   try { panel.style.bottom = (footerGap() + 10) + 'px'; } catch (e) {}
 
+  // Angepinntes Zielfeld wieder hervorheben. Das Feld selbst ueberlebt das
+  // Schliessen (es liegt im gemeinsamen Zustand), die Knopf-Markierung
+  // wurde aber nur beim Klick gesetzt - nach dem Oeffnen war sie weg.
+  // Vorher pruefen, ob das Feld noch im Dokument haengt: nach einem
+  // Maskenwechsel koennte die Markierung sonst auf ein Feld zeigen, das
+  // es nicht mehr gibt.
+  try {
+    const pinned = getPinnedField();
+    const lbl = getPinnedLabel();
+    if (pinned && lbl) {
+      let nochDa = false;
+      try { nochDa = !!(pinned.isConnected && (pinned.ownerDocument || document)); } catch (e) {}
+      if (nochDa) {
+        setActiveFieldButton(lbl);
+      } else {
+        // Feld ist verschwunden - Markierung und Anpinnung aufgeben
+        setPinnedField(null);
+        setPinnedMode(null);
+        setPinnedLabel(null);
+      }
+    }
+  } catch (e) {}
+
   document.getElementById('sram-x').addEventListener('click', closePanel);
   document.getElementById('sram-results').addEventListener('scroll', hideTooltip);
 
@@ -1120,6 +1152,7 @@ function buildPanel() {
       if (found) {
         setPinnedField(found);
         setPinnedMode(null);
+        setPinnedLabel(lbl);
         setActiveFieldButton(lbl);
         const hint = document.getElementById('sram-field-name');
         if (hint) { hint.textContent = '✓ Zielfeld gesetzt: ' + lbl; hint.style.color = '#1D9E75'; }
@@ -1134,6 +1167,7 @@ function buildPanel() {
   document.getElementById('sram-fld-auto').addEventListener('click', () => {
     setPinnedField(null);
     setPinnedMode(null);
+    setPinnedLabel(null);
     clearActiveFieldButtons();
     const hint = document.getElementById('sram-field-name');
     if (hint) { hint.textContent = '↺ Zurückgesetzt – automatische Erkennung aktiv'; hint.style.color = '#6B6B6B'; }
