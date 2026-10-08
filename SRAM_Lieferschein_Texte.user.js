@@ -1,23 +1,25 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      5.0
+// @version      5.1
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
 // @match        https://b2b.sram.com/*
 // @grant        none
 // @all-frames   true
+// @updateURL    https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js
+// @downloadURL  https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js
 // ==/UserScript==
 
 // Hinweis zur Update-Politik:
-// Im Metadaten-Block oben stehen bewusst KEINE Angaben zu Update- oder
-// Download-Adresse. Das Script aktualisiert sich dadurch nicht von selbst.
-// Stattdessen meldet der gelbe Balken im Panel eine neue Version, und das
-// Team entscheidet, wann es installiert.
-// Der Hinweis steht hier unten und nicht im Block darueber: Tampermonkey
-// liest den Block zeilenweise und koennte eine erwaehnte Schluesselangabe
-// sonst als echte Einstellung missdeuten.
+// Auto-Update ist aktiv: Tampermonkey prueft die Adresse oben selbst,
+// standardmaessig einmal taeglich, und ersetzt das Script ohne Zutun.
+// Versionen werden dabei nicht nacheinander durchlaufen - wer laenger
+// nicht da war, bekommt direkt die neueste Fassung.
+// Der gelbe Banner im Panel bleibt zusaetzlich drin: er meldet eine neue
+// Version sofort, bevor der taegliche Check laeuft, und erlaubt sie bei
+// Bedarf von Hand zu holen.
 
 
 (function() {
@@ -29,7 +31,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '5.0';
+const SCRIPT_VERSION = '5.1';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -1093,7 +1095,7 @@ function buildPanel() {
     const banner = document.getElementById('sram-update-banner');
     if (!banner) return;
     banner.style.display = 'block';
-    banner.innerHTML = `🔔 Neue Version <strong>${esc(newerVersion)}</strong> verfügbar (aktuell: ${esc(SCRIPT_VERSION)}). <a href="${esc(UPDATE_CHECK_URL)}" target="_blank" style="color:#7A5B00;text-decoration:underline;">Jetzt herunterladen</a> und in Tampermonkey importieren.`;
+    banner.innerHTML = `🔔 Version <strong>${esc(newerVersion)}</strong> ist verfügbar (installiert: ${esc(SCRIPT_VERSION)}). Sie wird automatisch installiert, meist innerhalb eines Tages – danach die Portalseite neu laden. <a href="${esc(UPDATE_CHECK_URL)}" target="_blank" style="color:#7A5B00;text-decoration:underline;">Sofort holen</a>, wenn es schneller gehen soll.`;
   });
 
   document.getElementById('sram-q').addEventListener('input', e => {
