@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      4.6
+// @version      4.7
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
 // @match        https://b2b.sram.com/*
 // @grant        none
 // @all-frames   true
+// @updateURL    https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js
+// @downloadURL  https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js
 // ==/UserScript==
 
 (function() {
@@ -19,7 +21,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '4.6';
+const SCRIPT_VERSION = '4.7';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js';
 
 function compareVersions(a, b) {
@@ -861,7 +863,7 @@ function buildPanel() {
     const banner = document.getElementById('sram-update-banner');
     if (!banner) return;
     banner.style.display = 'block';
-    banner.innerHTML = `🔔 New version <strong>${esc(newerVersion)}</strong> available (current: ${esc(SCRIPT_VERSION)}). <a href="${esc(UPDATE_CHECK_URL)}" target="_blank" style="color:#7A5B00;text-decoration:underline;">Download now</a> and import into Tampermonkey.`;
+    banner.innerHTML = `🔔 Version <strong>${esc(newerVersion)}</strong> is available (installed: ${esc(SCRIPT_VERSION)}). It installs automatically, usually within a day – then reload the portal page. <a href="${esc(UPDATE_CHECK_URL)}" target="_blank" style="color:#7A5B00;text-decoration:underline;">Get it now</a> if you need it sooner.`;
   });
 
   document.getElementById('sram-x').addEventListener('click', closePanel);
