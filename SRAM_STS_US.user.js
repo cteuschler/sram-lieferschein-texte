@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts US
 // @namespace    https://sram.com
-// @version      1.1
+// @version      5.1.1
 // @description  Text Assistant for the SRAM B2B Service Portal – United States
 // @author       SRAM STS US
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -21,7 +21,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '1.1';
+const SCRIPT_VERSION = '5.1.1';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_US.user.js';
 
 function compareVersions(a, b) {
@@ -81,10 +81,10 @@ let state = { cat: 'all', type: 'all', q: '', open: null };
 const IS_TOP_FRAME = (window === window.top);
 
 try {
-  if (!window.top._sramShared) window.top._sramShared = { lastFocused: null, pinnedField: null, pinnedMode: null };
+  if (!window.top._sramShared) window.top._sramShared = { lastFocused: null, pinnedField: null, pinnedMode: null, pinnedLabel: null };
 } catch(e) {
   // Cross-origin top frame — shouldn't happen on SAP portal, but handle gracefully
-  window._sramShared = { lastFocused: null, pinnedField: null, pinnedMode: null };
+  window._sramShared = { lastFocused: null, pinnedField: null, pinnedMode: null, pinnedLabel: null };
 }
 
 function getShared() {
@@ -98,6 +98,13 @@ function getPinnedMode()   { return getShared().pinnedMode; }
 function setLastFocused(el) { try { window.top._sramShared.lastFocused = el; } catch(e) {} }
 function setPinnedField(el) { try { window.top._sramShared.pinnedField = el; } catch(e) {} }
 function setPinnedMode(mode) { try { window.top._sramShared.pinnedMode = mode; } catch(e) {} }
+
+// Label of the pinned target field. Without it the panel could not tell
+// WHICH button to highlight when it is rebuilt - the field itself does not
+// know its button label. That is why the field stayed pinned after close
+// and reopen, but the button was no longer marked.
+function getPinnedLabel() { return getShared().pinnedLabel; }
+function setPinnedLabel(lbl) { try { window.top._sramShared.pinnedLabel = lbl; } catch(e) {} }
 
 // ── Determine if an element is an editable SAP/HTML field ──
 function isEditableField(el) {
@@ -461,6 +468,7 @@ function clickWriteMessageAndPin() {
       if (field) {
         setPinnedField(field);
         setPinnedMode('correspondence');
+        setPinnedLabel('Correspondence');
         setActiveFieldButton('Correspondence');
         setHint('✓ Target field set: Correspondence (Write Message dialog)', '#1D9E75');
       }
@@ -857,6 +865,28 @@ function buildPanel() {
   // End above the footer bar so the buttons stay visible
   try { panel.style.bottom = (footerGap() + 10) + 'px'; } catch (e) {}
 
+  // Highlight the pinned target field again. The field itself survives
+  // closing (it lives in the shared state), but the button highlight was
+  // only set on click - after reopening it was gone.
+  // Check first whether the field is still in the document: after a screen
+  // change the highlight could otherwise point at a field that no longer
+  // exists.
+  try {
+    const pinned = getPinnedField();
+    const lbl = getPinnedLabel();
+    if (pinned && lbl) {
+      let nochDa = false;
+      try { nochDa = !!(pinned.isConnected && (pinned.ownerDocument || document)); } catch (e) {}
+      if (nochDa) {
+        setActiveFieldButton(lbl);
+      } else {
+        setPinnedField(null);
+        setPinnedMode(null);
+        setPinnedLabel(null);
+      }
+    }
+  } catch (e) {}
+
   // Check once on open whether a newer version is available
   checkForUpdate((newerVersion) => {
     if (!newerVersion) return;
@@ -890,6 +920,7 @@ function buildPanel() {
       if (found) {
         setPinnedField(found);
         setPinnedMode(null);
+        setPinnedLabel(lbl);
         setActiveFieldButton(lbl);
         const hint = document.getElementById('sram-field-name');
         if (hint) { hint.textContent = '✓ Target field set: ' + lbl; hint.style.color = '#1D9E75'; }
@@ -904,6 +935,7 @@ function buildPanel() {
   document.getElementById('sram-fld-auto').addEventListener('click', () => {
     setPinnedField(null);
     setPinnedMode(null);
+    setPinnedLabel(null);
     clearActiveFieldButtons();
     const hint = document.getElementById('sram-field-name');
     if (hint) { hint.textContent = '↺ Reset – automatic detection active'; hint.style.color = '#6B6B6B'; }
