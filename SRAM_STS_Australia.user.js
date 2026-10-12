@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      5.1.1
+// @version      5.1.2
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -21,7 +21,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '5.1.1';
+const SCRIPT_VERSION = '5.1.2';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js';
 
 function compareVersions(a, b) {
@@ -103,8 +103,32 @@ function setPinnedMode(mode) { try { window.top._sramShared.pinnedMode = mode; }
 // WHICH button to highlight when it is rebuilt - the field itself does not
 // know its button label. That is why the field stayed pinned after close
 // and reopen, but the button was no longer marked.
-function getPinnedLabel() { return getShared().pinnedLabel; }
-function setPinnedLabel(lbl) { try { window.top._sramShared.pinnedLabel = lbl; } catch(e) {} }
+function getPinnedLabel() {
+  const l = getShared().pinnedLabel;
+  if (l) return l;
+  // Not in memory? Then read it from session storage - that happens after an
+  // order switch or a page reload.
+  try { return sessionStorage.getItem('sramPinnedField') || null; } catch (e) { return null; }
+}
+
+// The pin should hold across orders until "Reset" is pressed or the browser is
+// closed. Only the LABEL is stored, not the field itself: switching orders
+// rebuilds the screen, so the old field no longer exists. On opening, the
+// field is looked up again by its label.
+//
+// sessionStorage rather than localStorage, because it has exactly the right
+// lifetime: it survives order switches and reloads, and disappears when the
+// browser is closed.
+function setPinnedLabel(lbl) {
+  try { window.top._sramShared.pinnedLabel = lbl; } catch (e) {}
+  try {
+    // 'Correspondence' is deliberately NOT remembered: that field only exists
+    // while the Write Message dialog is open, and opening it on every panel
+    // click would be intrusive.
+    if (lbl && lbl !== 'Correspondence') sessionStorage.setItem('sramPinnedField', lbl);
+    else sessionStorage.removeItem('sramPinnedField');
+  } catch (e) {}
+}
 
 // ── Determine if an element is an editable SAP/HTML field ──
 function isEditableField(el) {
@@ -846,12 +870,22 @@ function buildPanel() {
       <input id="sram-q" type="text" placeholder="Search…" autocomplete="off" style="width:100%;padding:8px 10px;background:#F7F7F7;border:1px solid #D0D0D0;border-radius:4px;color:#312929;font-size:13px;outline:none;font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;" />
     </div>
     <div style="padding:8px 14px;background:#F7F7F7;border-bottom:1px solid #E5E5E5;flex-shrink:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-      <span style="font-size:10px;color:#6B6B6B;flex-shrink:0;font-weight:700;letter-spacing:0.04em;">TARGET FIELD:</span>
+      <!-- Two rows: label and hint on top, the buttons below.
+           Reset sits right after the short divider - it belongs to the
+           selection but is set apart from the field buttons. -->
+      <span style="font-size:10px;color:#6B6B6B;font-weight:700;letter-spacing:0.04em;">TARGET FIELD</span>
+      <span style="font-size:10px;color:#9A9A9A;">stays pinned, also across orders</span>
+      <div style="flex-basis:100%;height:0;"></div>
       <button class="sram-fld-btn" data-lbl="Internal Info" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Internal Info</button>
       <button class="sram-fld-btn" data-lbl="Shipping Info" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Shipping Info</button>
       <button class="sram-fld-btn" data-lbl="Header Note" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Header Note</button>
-      <button class="sram-fld-btn" data-lbl="Correspondence" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;" title="Automatically opens 'Write Message' if needed">Correspondence</button>
-      <button id="sram-fld-auto" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#8A8A8A;font-size:10px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;" title="Reset target field selection (automatic detection)">Reset</button>
+      <span style="width:1px;height:16px;align-self:center;background:#E2E2E2;margin:0 5px;"></span>
+      <button id="sram-fld-auto" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#8A8A8A;font-size:10px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;transition:background 140ms,color 140ms,border-color 140ms;" title="Unpin the target field – automatic detection takes over again">Reset</button>
+      <!-- The horizontal line separates the fields that can be pinned
+           permanently from Correspondence: that one opens a dialog and only
+           applies to the current screen, so it is not kept across orders. -->
+      <div style="flex-basis:100%;height:1px;background:#E2E2E2;margin:7px 0 2px;"></div>
+      <button class="sram-fld-btn" data-lbl="Correspondence" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;" title="Opens the Write Message dialog. Applies to this order only and is not pinned permanently.">Correspondence</button>
     </div>
     <div id="sram-field-hint" style="padding:6px 14px;background:#FFFBEA;border-bottom:1px solid #E5E5E5;font-size:10.5px;flex-shrink:0;display:flex;align-items:center;gap:6px;">
       <span id="sram-field-name" style="color:#B4780D;">⚠ No field selected – click a target field button or click a text field in the portal</span>
@@ -865,24 +899,35 @@ function buildPanel() {
   // End above the footer bar so the buttons stay visible
   try { panel.style.bottom = (footerGap() + 10) + 'px'; } catch (e) {}
 
-  // Highlight the pinned target field again. The field itself survives
-  // closing (it lives in the shared state), but the button highlight was
-  // only set on click - after reopening it was gone.
-  // Check first whether the field is still in the document: after a screen
-  // change the highlight could otherwise point at a field that no longer
-  // exists.
+  // Restore the pinned target field - across orders as well.
+  //
+  // Order of play: if the remembered field is still in the document, keep it.
+  // Otherwise look it up again by the stored label; that is what happens after
+  // an order switch, where the old field no longer exists. If nothing is found
+  // (on the start page, say), the label stays stored and the button stays
+  // highlighted - the field will be there again in the next order.
   try {
-    const pinned = getPinnedField();
     const lbl = getPinnedLabel();
-    if (pinned && lbl) {
+    if (lbl) {
+      const pinned = getPinnedField();
       let nochDa = false;
-      try { nochDa = !!(pinned.isConnected && (pinned.ownerDocument || document)); } catch (e) {}
-      if (nochDa) {
-        setActiveFieldButton(lbl);
-      } else {
-        setPinnedField(null);
-        setPinnedMode(null);
-        setPinnedLabel(null);
+      try { nochDa = !!(pinned && pinned.isConnected); } catch (e) {}
+      if (!nochDa) {
+        let neu = null;
+        try { neu = findFieldByLabel(lbl); } catch (e) {}
+        if (neu) { setPinnedField(neu); setPinnedMode(null); }
+        else { setPinnedField(null); }
+      }
+      setActiveFieldButton(lbl);
+      const hint = document.getElementById('sram-field-name');
+      if (hint) {
+        if (getPinnedField()) {
+          hint.textContent = '\u2713 Target field: ' + lbl + ' (pinned)';
+          hint.style.color = '#1D9E75';
+        } else {
+          hint.textContent = '\u2713 Target field: ' + lbl + ' \u2013 will be located in the order';
+          hint.style.color = '#B4780D';
+        }
       }
     }
   } catch (e) {}
@@ -939,6 +984,21 @@ function buildPanel() {
     clearActiveFieldButtons();
     const hint = document.getElementById('sram-field-name');
     if (hint) { hint.textContent = '↺ Reset – automatic detection active'; hint.style.color = '#6B6B6B'; }
+
+    // Flash red briefly. Without feedback there was no way to tell the click
+    // registered - the highlights disappear anyway, and if none was set
+    // nothing visible changes at all.
+    const b = document.getElementById('sram-fld-auto');
+    if (b) {
+      b.style.background = '#E31836';
+      b.style.borderColor = '#E31836';
+      b.style.color = '#FFFFFF';
+      setTimeout(() => {
+        b.style.background = '#FFFFFF';
+        b.style.borderColor = '#D0D0D0';
+        b.style.color = '#8A8A8A';
+      }, 420);
+    }
   });
 
   // Live hint: show current target field
