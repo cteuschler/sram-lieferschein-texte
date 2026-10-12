@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      5.1.1
+// @version      5.1.2
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -31,7 +31,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '5.1.1';
+const SCRIPT_VERSION = '5.1.2';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -225,8 +225,33 @@ function setPinnedMode(mode) { try { window.top._sramShared.pinnedMode = mode; }
 // werden muss - das Feld selbst kennt seine Knopf-Beschriftung nicht.
 // Dadurch war nach Schliessen und Oeffnen das Feld noch angepinnt, der
 // Knopf aber nicht mehr markiert.
-function getPinnedLabel() { return getShared().pinnedLabel; }
-function setPinnedLabel(lbl) { try { window.top._sramShared.pinnedLabel = lbl; } catch(e) {} }
+function getPinnedLabel() {
+  const l = getShared().pinnedLabel;
+  if (l) return l;
+  // Nicht im Arbeitsspeicher? Dann aus dem Sitzungsspeicher holen - das ist
+  // der Fall nach einem Auftragswechsel oder Neuladen der Seite.
+  try { return sessionStorage.getItem('sramPinnedField') || null; } catch (e) { return null; }
+}
+
+// Die Anpinnung soll ueber Auftraege hinweg halten, bis "Reset" gedrueckt
+// oder der Browser geschlossen wird. Gespeichert wird dabei nur die
+// BESCHRIFTUNG, nicht das Feld selbst: ein Auftragswechsel baut die Maske
+// neu auf, das alte Feld existiert danach nicht mehr. Beim Oeffnen wird es
+// anhand der Beschriftung erneut gesucht.
+//
+// sessionStorage statt localStorage, weil es genau die gewuenschte
+// Lebensdauer hat: ueberlebt Auftragswechsel und Neuladen, verschwindet
+// beim Schliessen des Browsers.
+function setPinnedLabel(lbl) {
+  try { window.top._sramShared.pinnedLabel = lbl; } catch (e) {}
+  try {
+    // 'Correspondence' wird NICHT dauerhaft gemerkt: dieses Feld existiert nur
+    // bei geoeffnetem Write-Message-Dialog, und ein automatisches Oeffnen bei
+    // jedem Panel-Aufruf waere aufdringlich.
+    if (lbl && lbl !== 'Correspondence') sessionStorage.setItem('sramPinnedField', lbl);
+    else sessionStorage.removeItem('sramPinnedField');
+  } catch (e) {}
+}
 
 // ── Determine if an element is an editable SAP/HTML field ──
 function isEditableField(el) {
@@ -1066,12 +1091,22 @@ function buildPanel() {
       <input id="sram-q" type="text" placeholder="Suchen… / Search…" autocomplete="off" style="width:100%;padding:8px 10px;background:#F7F7F7;border:1px solid #D0D0D0;border-radius:4px;color:#312929;font-size:13px;outline:none;font-family:Arial,Helvetica,sans-serif;box-sizing:border-box;" />
     </div>
     <div style="padding:8px 14px;background:#F7F7F7;border-bottom:1px solid #E5E5E5;flex-shrink:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-      <span style="font-size:10px;color:#6B6B6B;flex-shrink:0;font-weight:700;letter-spacing:0.04em;">ZIELFELD:</span>
+      <!-- Zwei Zeilen: oben Beschriftung und Hinweis, unten die Knoepfe.
+           Reset steht am rechten Rand der Knopfzeile - es gehoert zur Auswahl,
+           hebt sich durch den Abstand aber von den Feldknoepfen ab. -->
+      <span style="font-size:10px;color:#6B6B6B;font-weight:700;letter-spacing:0.04em;">ZIELFELD</span>
+      <span style="font-size:10px;color:#9A9A9A;">bleibt angepinnt, auch über Aufträge hinweg</span>
+      <div style="flex-basis:100%;height:0;"></div>
       <button class="sram-fld-btn" data-lbl="Interne Info" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Interne Info</button>
       <button class="sram-fld-btn" data-lbl="Versandinformation" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Versandinformation</button>
       <button class="sram-fld-btn" data-lbl="Bemerkungen" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">Bemerkungen</button>
-      <button class="sram-fld-btn" data-lbl="Correspondence" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;" title="Öffnet bei Bedarf automatisch 'Write Message'">Korrespondenz</button>
-      <button id="sram-fld-auto" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#8A8A8A;font-size:10px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;" title="Zielfeld-Auswahl zurücksetzen (automatische Erkennung)">Reset</button>
+      <span style="width:1px;height:16px;align-self:center;background:#E2E2E2;margin:0 5px;"></span>
+      <button id="sram-fld-auto" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#8A8A8A;font-size:10px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;transition:background 140ms,color 140ms,border-color 140ms;" title="Anpinnung aufheben – danach wird das Zielfeld wieder automatisch erkannt">Reset</button>
+      <!-- Waagerechte Linie trennt die dauerhaft anpinnbaren Felder von der
+           Korrespondenz: die oeffnet einen Dialog und gilt nur in der
+           aktuellen Maske, wird also nicht ueber Auftraege hinweg gemerkt. -->
+      <div style="flex-basis:100%;height:1px;background:#E2E2E2;margin:7px 0 2px;"></div>
+      <button class="sram-fld-btn" data-lbl="Correspondence" style="padding:4px 9px;border-radius:3px;border:1px solid #D0D0D0;background:#FFFFFF;color:#454545;font-size:11px;cursor:pointer;font-family:Arial,Helvetica,sans-serif;" title="Öffnet den Write-Message-Dialog. Gilt nur für diesen Auftrag und wird nicht dauerhaft angepinnt.">Korrespondenz</button>
     </div>
     <div id="sram-field-hint" style="padding:6px 14px;background:#FFFBEA;border-bottom:1px solid #E5E5E5;font-size:10.5px;flex-shrink:0;display:flex;align-items:center;gap:6px;">
       <span id="sram-field-name" style="color:#B4780D;">⚠ Kein Feld gewählt – Zielfeld-Button klicken oder Textfeld im Portal anklicken</span>
@@ -1085,25 +1120,37 @@ function buildPanel() {
   // Oberhalb der Fussleiste enden, damit die Knoepfe sichtbar bleiben
   try { panel.style.bottom = (footerGap() + 10) + 'px'; } catch (e) {}
 
-  // Angepinntes Zielfeld wieder hervorheben. Das Feld selbst ueberlebt das
-  // Schliessen (es liegt im gemeinsamen Zustand), die Knopf-Markierung
-  // wurde aber nur beim Klick gesetzt - nach dem Oeffnen war sie weg.
-  // Vorher pruefen, ob das Feld noch im Dokument haengt: nach einem
-  // Maskenwechsel koennte die Markierung sonst auf ein Feld zeigen, das
-  // es nicht mehr gibt.
+  // Angepinntes Zielfeld wiederherstellen - auch ueber Auftraege hinweg.
+  //
+  // Reihenfolge: Ist das gemerkte Feld noch im Dokument, wird es behalten.
+  // Sonst wird es anhand der gespeicherten Beschriftung neu gesucht; das
+  // greift nach einem Auftragswechsel, wo das alte Feld nicht mehr
+  // existiert. Wird nichts gefunden (etwa auf der Startseite), bleibt die
+  // Beschriftung gespeichert und der Knopf trotzdem markiert - beim
+  // naechsten Auftrag ist das Feld dann wieder da.
   try {
-    const pinned = getPinnedField();
     const lbl = getPinnedLabel();
-    if (pinned && lbl) {
+    if (lbl) {
+      const pinned = getPinnedField();
       let nochDa = false;
-      try { nochDa = !!(pinned.isConnected && (pinned.ownerDocument || document)); } catch (e) {}
-      if (nochDa) {
-        setActiveFieldButton(lbl);
-      } else {
-        // Feld ist verschwunden - Markierung und Anpinnung aufgeben
-        setPinnedField(null);
-        setPinnedMode(null);
-        setPinnedLabel(null);
+      try { nochDa = !!(pinned && pinned.isConnected); } catch (e) {}
+      if (!nochDa) {
+        let neu = null;
+        try { neu = findFieldByLabel(lbl); } catch (e) {}
+        if (neu) { setPinnedField(neu); setPinnedMode(null); }
+        else { setPinnedField(null); }
+      }
+      setActiveFieldButton(lbl);
+      // Hinweiszeile selbst setzen - eine zentrale Funktion dafuer gibt es nicht
+      const hint = document.getElementById('sram-field-name');
+      if (hint) {
+        if (getPinnedField()) {
+          hint.textContent = '\u2713 Zielfeld: ' + lbl + ' (angepinnt)';
+          hint.style.color = '#1D9E75';
+        } else {
+          hint.textContent = '\u2713 Zielfeld: ' + lbl + ' \u2013 wird im Auftrag gesucht';
+          hint.style.color = '#B4780D';
+        }
       }
     }
   } catch (e) {}
@@ -1171,6 +1218,21 @@ function buildPanel() {
     clearActiveFieldButtons();
     const hint = document.getElementById('sram-field-name');
     if (hint) { hint.textContent = '↺ Zurückgesetzt – automatische Erkennung aktiv'; hint.style.color = '#6B6B6B'; }
+
+    // Kurz rot aufleuchten. Ohne Rueckmeldung war nicht erkennbar, ob der
+    // Klick angekommen ist - die Knopf-Markierungen verschwinden ja, und
+    // wenn vorher keine gesetzt war, aendert sich sichtbar gar nichts.
+    const b = document.getElementById('sram-fld-auto');
+    if (b) {
+      b.style.background = '#E31836';
+      b.style.borderColor = '#E31836';
+      b.style.color = '#FFFFFF';
+      setTimeout(() => {
+        b.style.background = '#FFFFFF';
+        b.style.borderColor = '#D0D0D0';
+        b.style.color = '#8A8A8A';
+      }, 420);
+    }
   });
 
   // Live hint: show current target field
