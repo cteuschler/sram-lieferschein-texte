@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts US
 // @namespace    https://sram.com
-// @version      5.1.3
+// @version      5.1.5
 // @description  Text Assistant for the SRAM B2B Service Portal – United States
 // @author       SRAM STS US
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -21,7 +21,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '5.1.3';
+const SCRIPT_VERSION = '5.1.5';
 
 // ── Shipping locations ────────────────────────────────────────────────
 // Eight snippets contain the shipping address as a placeholder. Instead of
@@ -2487,6 +2487,17 @@ function renderBody() {
            '<div class="sram-bk-detbox" id="det-' + esc(k) + '" style="display:none;margin-top:8px;"></div>' +
            '</div>';
     });
+
+    // Bulk button: clicking each one is tedious once there are several.
+    // Deliberately understated and with a confirmation - deleting cannot be
+    // undone, and failed states are the most valuable ones.
+    if (karten.length > 1) {
+      h += '<div style="display:flex;justify-content:flex-end;margin:10px 0 2px;">' +
+           '<button id="sram-bk-delall" style="font-size:11px;padding:5px 11px;border:1px solid #E0B4B4;' +
+           'background:#FFFFFF;color:#A02020;border-radius:3px;cursor:pointer;' +
+           'font-family:Arial,Helvetica,sans-serif;">Discard all ' + karten.length + ' backups</button>' +
+           '</div>';
+    }
   }
 
   // Protokoll
@@ -2589,6 +2600,29 @@ function renderBody() {
     renderBody();
     updateBadge();
   }));
+
+  // Discard all
+  const da = document.getElementById('sram-bk-delall');
+  if (da) {
+    da.addEventListener('mousedown', e => e.preventDefault());
+    da.addEventListener('click', () => {
+      const keys = listBackupKeys();
+      // Name the failed states separately: those are exactly what is needed
+      // when it matters, and they cannot be recovered once deleted.
+      let fehl = 0;
+      keys.forEach(k => {
+        const s = lsGet(k, null);
+        if (s && s.saveState && (s.saveState.state === 'failed' || s.saveState.state === 'session-expired')) fehl++;
+      });
+      const frage = 'Discard all ' + keys.length + ' backups?\n\n' +
+        (fehl ? 'Including ' + fehl + ' with a failed save - those are exactly the ones you need when it matters.\n\n' : '') +
+        'This cannot be undone. The orders in the portal are not touched.';
+      if (!window.confirm(frage)) return;
+      keys.forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
+      renderBody();
+      updateBadge();
+    });
+  }
 
   const lt = document.getElementById('sram-bk-logtoggle');
   if (lt) {
@@ -2739,7 +2773,102 @@ function findPlusForItem(tc, itemNo) {
 // nurLeere = true: vorhandene Werte werden nicht angetastet. Das wird beim
 // Auffuellen BESTEHENDER Produktzeilen gebraucht - dort darf nichts
 // ueberschrieben werden, was der Bearbeiter schon eingetragen hat.
-function fillRow(tc, rowIndex, daten, erlaubt, nurLeere) {
+// The order is mandatory, not just preferable:
+//   1. Material number - the portal then loads the Item Categories allowed
+//      for that material (measured: the product row offered only ZTAX, one
+//      added material five values, another two)
+//   2. Item Category   - must be set before the price fields are released
+//   3. Manual Price    - the tick is what releases the price field
+//   4. Net Value       - only then can the price be entered
+// In any other order the portal discards the input.
+const PHASEN = [['Material', 'Quantity'], ['ItemCategory'], ['ManualPriceIndicator'], ['NetValue']];
+
+// Every field that has its own phase - skipped in the final phase because it
+// has already been set there.
+const VORRANG = ['Material', 'Quantity', 'ItemCategory', 'ManualPriceIndicator', 'NetValue'];
+
+// Default values the portal fills in by itself. They have to count as "empty",
+// otherwise a backed up value is never written back: after a failed save
+// NetValue reads "0.00", and an "is the field empty?" check treated that as
+// occupied - the price entered by the processor never came back.
+function istVorgabe(v) {
+  if (v === null || v === undefined || v === '' || v === false) return true;
+  const s = String(v).trim().replace(',', '.');
+  return s === '0' || s === '0.0' || s === '0.00';
+}
+
+// Waits until the dropdown lists of this row are loaded.
+//
+// Measured: after entering the material number the portal needed about
+// 1050 ms before the Item Categories were loaded - after 350 and 700 ms the
+// list was still empty. A fixed pause is therefore unusable: too short loses
+// values, too long makes the whole thing needlessly slow.
+//
+// Nothing is assumed about expected values. Plant and storage location differ
+// per location and material - the test order offered two plants and ten
+// storage locations. What gets written is always what was in the backup.
+function warteAufAuswahl(tc, rowIndex, felder, daten, fertig, versuch) {
+  versuch = versuch || 0;
+  const rows = tc.tbl.getRows ? tc.tbl.getRows() : [];
+  const row = rows[rowIndex];
+  if (!row || versuch > 20) { fertig(); return; }      // max. approx. 3 s
+  let warten = false;
+  (row.getCells ? row.getCells() : []).forEach(c => {
+    try {
+      const typ = c.getMetadata().getName();
+      if (!/\.(Select|ComboBox)$/.test(typ)) return;
+      const bi = c.getBindingInfo('selectedKey') || c.getBindingInfo('value');
+      const pfad = bi && bi.parts && bi.parts[0] && bi.parts[0].path;
+      if (!pfad) return;
+      const feld = String(pfad).split('/').pop();
+      if (felder && felder.indexOf(feld) < 0) return;
+
+      // Only wait when a value is actually backed up for this field.
+      // Otherwise the run hit the full timeout: on the product row the
+      // storage location legitimately has ZERO options, and waiting for that
+      // cost three seconds every time.
+      const ziel = daten ? daten[feld] : undefined;
+      if (ziel === null || ziel === undefined || ziel === '') return;
+
+      // Is the wanted value already in the list? Then it is loaded.
+      const schluessel = (c.getItems() || []).map(x => { try { return String(x.getKey()); } catch (e) { return ''; } });
+      if (schluessel.indexOf(String(ziel)) < 0) warten = true;
+    } catch (e) {}
+  });
+  if (!warten) { fertig(); return; }
+  setTimeout(() => warteAufAuswahl(tc, rowIndex, felder, daten, fertig, versuch + 1), 150);
+}
+
+// Fills a row in the phases defined above and reports the result once all
+// phases are through.
+function fuelleInPhasen(tc, rowIndex, daten, erlaubt, nurLeere, fertig) {
+  const schritte = PHASEN.concat([null]);   // null = all remaining fields
+  let gesetzt = 0, offen = [], i = 0;
+  (function naechstePhase() {
+    if (i >= schritte.length) { fertig({ ok: gesetzt > 0, gesetzt: gesetzt, offen: offen }); return; }
+    const phase = schritte[i];
+
+    // Skip a phase when nothing is backed up for it - otherwise every empty
+    // phase is waited out although there is nothing to write.
+    const etwasZuTun = !phase || phase.some(f => {
+      const v = daten ? daten[f] : undefined;
+      return v !== null && v !== undefined && v !== '';
+    });
+    if (!etwasZuTun) { i++; naechstePhase(); return; }
+
+    warteAufAuswahl(tc, rowIndex, phase, daten, () => {
+      let r = { gesetzt: 0, offen: [] };
+      try { r = fillRow(tc, rowIndex, daten, erlaubt, nurLeere, phase); } catch (e) {}
+      gesetzt += r.gesetzt;
+      offen = offen.concat(r.offen);
+      i++;
+      setTimeout(naechstePhase, 120);
+    });
+  })();
+}
+
+// nurFelder: limits this pass to these fields (null = all remaining ones).
+function fillRow(tc, rowIndex, daten, erlaubt, nurLeere, nurFelder) {
   const rows = tc.tbl.getRows ? tc.tbl.getRows() : [];
   const row = rows[rowIndex];
   if (!row) return { ok: false, gesetzt: 0, offen: ['new row not reachable'] };
@@ -2753,6 +2882,8 @@ function fillRow(tc, rowIndex, daten, erlaubt, nurLeere) {
       const feld = String(pfad).split('/').pop();
       if (!(feld in daten)) return;
       if (erlaubt && erlaubt.indexOf(feld) < 0) return;
+      if (nurFelder && nurFelder.indexOf(feld) < 0) return;
+      if (!nurFelder && VORRANG.indexOf(feld) >= 0) return;   // done in an earlier phase
       const wert = daten[feld];
       if (wert === null || wert === undefined || wert === '') return;
 
@@ -2764,8 +2895,25 @@ function fillRow(tc, rowIndex, daten, erlaubt, nurLeere) {
           else if (typeof c.getValue === 'function') aktuell = c.getValue();
           else if (typeof c.getSelected === 'function') aktuell = c.getSelected();
         } catch (e) {}
-        const leer = (aktuell === null || aktuell === undefined || aktuell === '' || aktuell === false);
-        if (!leer) { offen.push(feld + ' (already filled, skipped)'); return; }
+        // Already matching the backup? Then nothing to do.
+        if (String(aktuell) === String(wert)) return;
+
+        // The distinction is by KIND of field, not by expected values:
+        //
+        // Dropdowns and ticks are pre-filled by the portal itself - after
+        // entering the material number the test pre-selected ZTDN although
+        // ZTAD was backed up. A pre-selection may therefore be overwritten,
+        // otherwise the backed up value would never come back.
+        //
+        // Free text fields (price, serial number, date) are typed by a human.
+        // If something other than the backup is there and not merely a zero,
+        // someone stepped in after the failure - that is not destroyed but
+        // reported.
+        const istAuswahl2 = /\.(Select|ComboBox|CheckBox|Switch)$/.test(c.getMetadata().getName());
+        if (!istAuswahl2 && !istVorgabe(aktuell)) {
+          offen.push(feld + ' (filled differently: ' + String(aktuell).slice(0, 20) + ', skipped)');
+          return;
+        }
       }
 
       // Der Schreibweg wird nach dem CONTROL-TYP entschieden, nicht nach der
@@ -2846,25 +2994,36 @@ function restoreItemFields(snap, fertig) {
   const ctxs = tc.binding.getContexts(0, 200) || [];
   const rows = tc.tbl.getRows ? tc.tbl.getRows() : [];
 
-  (snap.items || []).forEach(it => {
-    if (it._parentItem) return;                    // Nachtraege laufen ueber restoreMaterials
-    if (!it.Item) return;
+  // Product rows only; added materials go through restoreMaterials.
+  const aufgaben = (snap.items || []).filter(it => !it._parentItem && it.Item);
+  if (!aufgaben.length) { fertig([{ ok: null, text: 'no item fields to fill' }]); return; }
+
+  // Rows are filled ONE AFTER ANOTHER, not in parallel: each row runs through
+  // the phases Material -> Item Category -> Manual Price -> Net Value, and two
+  // rows at once would get in each other's way.
+  let n = 0;
+  (function naechsteZeile() {
+    if (n >= aufgaben.length) { fertig(melde); return; }
+    const it = aufgaben[n++];
     let idx = -1;
     ctxs.forEach((c, i) => {
       const o = c.getObject() || {};
       if (normItem(o.Item) === normItem(it.Item)) idx = i;
     });
-    if (idx < 0) { melde.push({ ok: false, text: 'Item ' + it.Item + ': Row nicht gefunden' }); return; }
-    if (!rows[idx]) { melde.push({ ok: false, text: 'Item ' + it.Item + ': Row nicht sichtbar' }); return; }
+    if (idx < 0) { melde.push({ ok: false, text: 'Item ' + it.Item + ': row not found' }); naechsteZeile(); return; }
+    if (!rows[idx]) { melde.push({ ok: false, text: 'Item ' + it.Item + ': row not visible' }); naechsteZeile(); return; }
 
-    const res = fillRow(tc, idx, it._all || it, erlaubt, true);
-    if (res.gesetzt) {
-      melde.push({ ok: true, text: 'Item ' + it.Item + ': ' + res.gesetzt + ' field(s) filled' +
-        (res.offen.length ? ' (' + res.offen.length + ' skipped)' : '') });
-    } else {
-      melde.push({ ok: null, text: 'Item ' + it.Item + ': nothing to fill' });
-    }
-  });
+    fuelleInPhasen(tc, idx, it._all || it, erlaubt, true, (res) => {
+      if (res.gesetzt) {
+        melde.push({ ok: true, text: 'Item ' + it.Item + ': ' + res.gesetzt + ' field(s) filled' +
+          (res.offen.length ? ' (' + res.offen.length + ' skipped)' : '') });
+      } else {
+        melde.push({ ok: null, text: 'Item ' + it.Item + ': nothing to fill' });
+      }
+      naechsteZeile();
+    });
+  })();
+  return;
 
   fertig(melde.length ? melde : [{ ok: null, text: 'no item fields to fill' }]);
 }
@@ -2950,14 +3109,15 @@ function restoreMaterials(snap, fertig) {
           if (/\/Actuals\/\d+$/.test(c.getPath()) && !o.Material) neuIdx = idx;
         });
         if (neuIdx < 0) neuIdx = ctxs.length - 1;
-        const res = fillRow(tc, neuIdx, daten, erlaubt);
-        melde.push({
-          ok: res.ok,
-          text: a.mat.Material + ' at item ' + a.parent + (res.ok
-            ? ': created, ' + res.gesetzt + ' fields filled' + (res.offen.length ? ' (offen: ' + res.offen.join(', ') + ')' : '')
-            : ': row created, fields could not be filled')
+        fuelleInPhasen(tc, neuIdx, daten, erlaubt, false, (res) => {
+          melde.push({
+            ok: res.ok,
+            text: a.mat.Material + ' at item ' + a.parent + (res.ok
+              ? ': created, ' + res.gesetzt + ' fields filled' + (res.offen.length ? ' (open: ' + res.offen.join(', ') + ')' : '')
+              : ': row created, fields could not be filled')
+          });
+          setTimeout(naechste, 400);
         });
-        setTimeout(naechste, 400);
         return;
       }
       if (versuche < 12) { setTimeout(warte, 250); return; }
