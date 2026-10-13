@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      5.1.2
+// @version      5.1.5
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -31,7 +31,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '5.1.2';
+const SCRIPT_VERSION = '5.1.5';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -2705,6 +2705,17 @@ function renderBody() {
            '<div class="sram-bk-detbox" id="det-' + esc(k) + '" style="display:none;margin-top:8px;"></div>' +
            '</div>';
     });
+
+    // Sammelknopf: bei mehreren Sicherungen ist Einzelklicken muehsam.
+    // Absichtlich zurueckhaltend gestaltet und mit Rueckfrage - das Loeschen
+    // ist nicht umkehrbar, und fehlgeschlagene Staende sind die wertvollsten.
+    if (karten.length > 1) {
+      h += '<div style="display:flex;justify-content:flex-end;margin:10px 0 2px;">' +
+           '<button id="sram-bk-delall" style="font-size:11px;padding:5px 11px;border:1px solid #E0B4B4;' +
+           'background:#FFFFFF;color:#A02020;border-radius:3px;cursor:pointer;' +
+           'font-family:Arial,Helvetica,sans-serif;">Alle ' + karten.length + ' Sicherungen verwerfen</button>' +
+           '</div>';
+    }
   }
 
   // Protokoll
@@ -2808,6 +2819,29 @@ function renderBody() {
     renderBody();
     updateBadge();
   }));
+
+  // Alles verwerfen
+  const da = document.getElementById('sram-bk-delall');
+  if (da) {
+    da.addEventListener('mousedown', e => e.preventDefault());
+    da.addEventListener('click', () => {
+      const keys = listBackupKeys();
+      // Fehlgeschlagene Staende getrennt nennen: genau die braucht man im
+      // Ernstfall, und sie sind nach dem Loeschen nicht wiederherstellbar.
+      let fehl = 0;
+      keys.forEach(k => {
+        const s = lsGet(k, null);
+        if (s && s.saveState && (s.saveState.state === 'fehlgeschlagen' || s.saveState.state === 'sitzung-abgelaufen')) fehl++;
+      });
+      const frage = 'Alle ' + keys.length + ' Sicherungen verwerfen?\n\n' +
+        (fehl ? 'Darunter ' + fehl + ' mit fehlgeschlagenem Speichern - genau die braucht man im Ernstfall.\n\n' : '') +
+        'Das laesst sich nicht rueckgaengig machen. Die Auftraege im Portal bleiben unberuehrt.';
+      if (!window.confirm(frage)) return;
+      keys.forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
+      renderBody();
+      updateBadge();
+    });
+  }
 
   const lt = document.getElementById('sram-bk-logtoggle');
   if (lt) {
@@ -2958,7 +2992,112 @@ function findPlusForItem(tc, itemNo) {
 // nurLeere = true: vorhandene Werte werden nicht angetastet. Das wird beim
 // Auffuellen BESTEHENDER Produktzeilen gebraucht - dort darf nichts
 // ueberschrieben werden, was der Bearbeiter schon eingetragen hat.
-function fillRow(tc, rowIndex, daten, erlaubt, nurLeere) {
+// Vorgabewerte, die das Portal von sich aus eintraegt. Sie muessen als
+// "leer" gelten, sonst wird ein gesicherter Wert nicht zurueckgeschrieben:
+// NetValue steht nach einem Fehlschlag auf "0.00", und meine frueher Pruefung
+// "ist das Feld leer?" hat das als belegt gewertet - der vom Bearbeiter
+// eingetragene Preis kam dadurch nicht zurueck.
+// Die Reihenfolge ist zwingend, nicht nur guenstig:
+//   1. Materialnummer  - danach laedt das Portal die erlaubten Item
+//      Categories passend zum Material nach (im Testauftrag hatte die
+//      Produktzeile nur ZTAX, ein Nachtrag fuenf Werte, ein anderer zwei)
+//   2. Item Category   - muss stehen, bevor die Preisfelder freigeschaltet
+//      werden
+//   3. Manual Price    - der Haken schaltet das Preisfeld erst frei
+//   4. Net Value       - erst danach laesst sich der Preis eintragen
+// In anderer Reihenfolge verwirft das Portal die Eingaben. Zwischen den
+// Phasen wird gewartet, damit das Portal nachladen kann.
+const PHASEN = [['Material', 'Quantity'], ['ItemCategory'], ['ManualPriceIndicator'], ['NetValue']];
+
+// Alle Felder, die eine eigene Phase haben - in der Abschlussphase werden
+// sie uebersprungen, weil sie dort schon gesetzt sind.
+const VORRANG = ['Material', 'Quantity', 'ItemCategory', 'ManualPriceIndicator', 'NetValue'];
+
+// Fuellt eine Zeile in den oben festgelegten Phasen und meldet das Ergebnis
+// gesammelt, sobald alle Phasen durch sind.
+// Wartet, bis die Auswahllisten dieser Zeile gefuellt sind.
+//
+// Gemessen: Nach Eingabe der Materialnummer brauchte das Portal rund
+// 1050 ms, bis die Item Categories geladen waren - nach 350 und 700 ms war
+// die Liste noch leer. Eine feste Pause ist deshalb untauglich: zu kurz
+// verliert Werte, zu lang macht den Vorgang unnoetig langsam. Darum wird
+// gezielt gewartet, bis die Liste Einträge hat.
+//
+// Wichtig: Es wird NICHTS ueber erwartete Werte angenommen. Werk und
+// Lagerort unterscheiden sich je Standort und Material - im Testauftrag
+// standen zwei Werke und zehn Lagerorte zur Wahl. Gesetzt wird immer das,
+// was in der Sicherung stand.
+function warteAufAuswahl(tc, rowIndex, felder, daten, fertig, versuch) {
+  versuch = versuch || 0;
+  const rows = tc.tbl.getRows ? tc.tbl.getRows() : [];
+  const row = rows[rowIndex];
+  if (!row || versuch > 20) { fertig(); return; }      // max. ca. 3 s
+  let warten = false;
+  (row.getCells ? row.getCells() : []).forEach(c => {
+    try {
+      const typ = c.getMetadata().getName();
+      if (!/\.(Select|ComboBox)$/.test(typ)) return;
+      const bi = c.getBindingInfo('selectedKey') || c.getBindingInfo('value');
+      const pfad = bi && bi.parts && bi.parts[0] && bi.parts[0].path;
+      if (!pfad) return;
+      const feld = String(pfad).split('/').pop();
+      if (felder && felder.indexOf(feld) < 0) return;
+
+      // Nur warten, wenn fuer dieses Feld ueberhaupt ein Wert gesichert ist.
+      // Sonst lief der Vorgang in die volle Zeitueberschreitung: Die
+      // Produktzeile hat beim Lagerort regulaer NULL Auswahlmoeglichkeiten,
+      // und darauf zu warten kostete jedes Mal drei Sekunden.
+      const ziel = daten ? daten[feld] : undefined;
+      if (ziel === null || ziel === undefined || ziel === '') return;
+
+      // Steht der gesuchte Wert schon in der Liste? Dann ist sie geladen.
+      const schluessel = (c.getItems() || []).map(x => { try { return String(x.getKey()); } catch (e) { return ''; } });
+      if (schluessel.indexOf(String(ziel)) < 0) warten = true;
+    } catch (e) {}
+  });
+  if (!warten) { fertig(); return; }
+  setTimeout(() => warteAufAuswahl(tc, rowIndex, felder, daten, fertig, versuch + 1), 150);
+}
+
+function fuelleInPhasen(tc, rowIndex, daten, erlaubt, nurLeere, fertig) {
+  const schritte = PHASEN.concat([null]);   // null = alle uebrigen Felder
+  let gesetzt = 0, offen = [], i = 0;
+  (function naechstePhase() {
+    if (i >= schritte.length) { fertig({ ok: gesetzt > 0, gesetzt: gesetzt, offen: offen }); return; }
+    const phase = schritte[i];
+
+    // Phase ueberspringen, wenn dafuer nichts gesichert ist - sonst wird fuer
+    // jede leere Phase gewartet, obwohl es nichts zu schreiben gibt.
+    const etwasZuTun = !phase || phase.some(f => {
+      const v = daten ? daten[f] : undefined;
+      return v !== null && v !== undefined && v !== '';
+    });
+    if (!etwasZuTun) { i++; naechstePhase(); return; }
+
+    warteAufAuswahl(tc, rowIndex, phase, daten, () => {
+      let r = { gesetzt: 0, offen: [] };
+      try { r = fillRow(tc, rowIndex, daten, erlaubt, nurLeere, phase); } catch (e) {}
+      gesetzt += r.gesetzt;
+      offen = offen.concat(r.offen);
+      i++;
+      setTimeout(naechstePhase, 120);
+    });
+  })();
+}
+
+function istVorgabe(v) {
+  if (v === null || v === undefined || v === '' || v === false) return true;
+  const s = String(v).trim().replace(',', '.');
+  return s === '0' || s === '0.0' || s === '0.00';
+}
+
+// nurFelder: begrenzt den Durchgang auf diese Felder (null = alle uebrigen).
+// Gebraucht fuer die Reihenfolge beim Wiederanlegen: Das Portal laedt die
+// erlaubten Item Categories NACH der Materialnummer. Im Testauftrag hatte
+// die Produktzeile nur ZTAX zur Wahl, ein Nachtrag fuenf Werte und ein
+// anderer zwei - die Liste haengt also am Material. Wird die Kategorie vor
+// dem Material gesetzt, ist die Liste noch leer und der Wert faellt weg.
+function fillRow(tc, rowIndex, daten, erlaubt, nurLeere, nurFelder) {
   const rows = tc.tbl.getRows ? tc.tbl.getRows() : [];
   const row = rows[rowIndex];
   if (!row) return { ok: false, gesetzt: 0, offen: ['neue Zeile nicht erreichbar'] };
@@ -2972,6 +3111,8 @@ function fillRow(tc, rowIndex, daten, erlaubt, nurLeere) {
       const feld = String(pfad).split('/').pop();
       if (!(feld in daten)) return;
       if (erlaubt && erlaubt.indexOf(feld) < 0) return;
+      if (nurFelder && nurFelder.indexOf(feld) < 0) return;
+      if (!nurFelder && VORRANG.indexOf(feld) >= 0) return;   // im ersten Durchgang erledigt
       const wert = daten[feld];
       if (wert === null || wert === undefined || wert === '') return;
 
@@ -2983,8 +3124,25 @@ function fillRow(tc, rowIndex, daten, erlaubt, nurLeere) {
           else if (typeof c.getValue === 'function') aktuell = c.getValue();
           else if (typeof c.getSelected === 'function') aktuell = c.getSelected();
         } catch (e) {}
-        const leer = (aktuell === null || aktuell === undefined || aktuell === '' || aktuell === false);
-        if (!leer) { offen.push(feld + ' (bereits gefuellt, uebersprungen)'); return; }
+        // Stimmt der Wert schon mit der Sicherung ueberein? Dann nichts tun.
+        if (String(aktuell) === String(wert)) return;
+
+        // Unterschieden wird nach Art des Feldes, nicht nach erwarteten Werten:
+        //
+        // Auswahlfelder und Haken werden vom Portal selbst vorbelegt - nach
+        // Eingabe der Materialnummer wurde im Test etwa ZTDN vorausgewaehlt,
+        // obwohl ZTAD gesichert war. Eine Vorauswahl darf daher ueberschrieben
+        // werden, sonst kaeme der gesicherte Wert nie zurueck.
+        //
+        // Freie Textfelder (Preis, Seriennummer, Datum) tippt dagegen ein
+        // Mensch. Steht dort etwas anderes als in der Sicherung und nicht
+        // bloss eine Null, wurde nach dem Fehlschlag eingegriffen - das wird
+        // nicht zerstoert, sondern gemeldet.
+        const istAuswahl2 = /\.(Select|ComboBox|CheckBox|Switch)$/.test(c.getMetadata().getName());
+        if (!istAuswahl2 && !istVorgabe(aktuell)) {
+          offen.push(feld + ' (abweichend gefuellt: ' + String(aktuell).slice(0, 20) + ', uebersprungen)');
+          return;
+        }
       }
 
       // Der Schreibweg wird nach dem CONTROL-TYP entschieden, nicht nach der
@@ -3065,27 +3223,35 @@ function restoreItemFields(snap, fertig) {
   const ctxs = tc.binding.getContexts(0, 200) || [];
   const rows = tc.tbl.getRows ? tc.tbl.getRows() : [];
 
-  (snap.items || []).forEach(it => {
-    if (it._parentItem) return;                    // Nachtraege laufen ueber restoreMaterials
-    if (!it.Item) return;
+  // Nur Produktzeilen; Nachtraege laufen ueber restoreMaterials.
+  const aufgaben = (snap.items || []).filter(it => !it._parentItem && it.Item);
+  if (!aufgaben.length) { fertig([{ ok: null, text: 'keine Positionsfelder zu fuellen' }]); return; }
+
+  // Zeilen werden NACHEINANDER gefuellt, nicht parallel: jede Zeile laeuft
+  // durch die Phasen Material -> Item Category -> Manual Price -> Net Value,
+  // und zwei Zeilen gleichzeitig wuerden sich dabei in die Quere kommen.
+  let n = 0;
+  (function naechsteZeile() {
+    if (n >= aufgaben.length) { fertig(melde); return; }
+    const it = aufgaben[n++];
     let idx = -1;
     ctxs.forEach((c, i) => {
       const o = c.getObject() || {};
       if (normItem(o.Item) === normItem(it.Item)) idx = i;
     });
-    if (idx < 0) { melde.push({ ok: false, text: 'Position ' + it.Item + ': Zeile nicht gefunden' }); return; }
-    if (!rows[idx]) { melde.push({ ok: false, text: 'Position ' + it.Item + ': Zeile nicht sichtbar' }); return; }
+    if (idx < 0) { melde.push({ ok: false, text: 'Position ' + it.Item + ': Zeile nicht gefunden' }); naechsteZeile(); return; }
+    if (!rows[idx]) { melde.push({ ok: false, text: 'Position ' + it.Item + ': Zeile nicht sichtbar' }); naechsteZeile(); return; }
 
-    const res = fillRow(tc, idx, it._all || it, erlaubt, true);
-    if (res.gesetzt) {
-      melde.push({ ok: true, text: 'Position ' + it.Item + ': ' + res.gesetzt + ' Feld(er) gefuellt' +
-        (res.offen.length ? ' (' + res.offen.length + ' uebersprungen)' : '') });
-    } else {
-      melde.push({ ok: null, text: 'Position ' + it.Item + ': nichts zu fuellen' });
-    }
-  });
-
-  fertig(melde.length ? melde : [{ ok: null, text: 'keine Positionsfelder zu fuellen' }]);
+    fuelleInPhasen(tc, idx, it._all || it, erlaubt, true, (res) => {
+      if (res.gesetzt) {
+        melde.push({ ok: true, text: 'Position ' + it.Item + ': ' + res.gesetzt + ' Feld(er) gefuellt' +
+          (res.offen.length ? ' (' + res.offen.length + ' uebersprungen)' : '') });
+      } else {
+        melde.push({ ok: null, text: 'Position ' + it.Item + ': nichts zu fuellen' });
+      }
+      naechsteZeile();
+    });
+  })();
 }
 
 function restoreMaterials(snap, fertig) {
@@ -3169,14 +3335,15 @@ function restoreMaterials(snap, fertig) {
           if (/\/Actuals\/\d+$/.test(c.getPath()) && !o.Material) neuIdx = idx;
         });
         if (neuIdx < 0) neuIdx = ctxs.length - 1;
-        const res = fillRow(tc, neuIdx, daten, erlaubt);
-        melde.push({
-          ok: res.ok,
-          text: a.mat.Material + ' bei Position ' + a.parent + (res.ok
-            ? ': angelegt, ' + res.gesetzt + ' Felder gefuellt' + (res.offen.length ? ' (offen: ' + res.offen.join(', ') + ')' : '')
-            : ': Zeile angelegt, Felder konnten nicht gefuellt werden')
+        fuelleInPhasen(tc, neuIdx, daten, erlaubt, false, (res) => {
+          melde.push({
+            ok: res.ok,
+            text: a.mat.Material + ' bei Position ' + a.parent + (res.ok
+              ? ': angelegt, ' + res.gesetzt + ' Felder gefuellt' + (res.offen.length ? ' (offen: ' + res.offen.join(', ') + ')' : '')
+              : ': Zeile angelegt, Felder konnten nicht gefuellt werden')
+          });
+          setTimeout(naechste, 400);
         });
-        setTimeout(naechste, 400);
         return;
       }
       if (versuche < 12) { setTimeout(warte, 250); return; }
