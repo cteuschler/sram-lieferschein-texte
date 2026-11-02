@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Agent lite (Beta)
 // @namespace    https://sram.com
-// @version      0.7.3
+// @version      0.8.0
 // @description  BETA – KVA-Nachverfolgung für das SRAM B2B Service-Portal (Deutschland)
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -38,7 +38,7 @@
 (function () {
 'use strict';
 
-const VERSION = '0.7.3';
+const VERSION = '0.8.0';
 const IS_TOP = (window === window.top);
 
 // Status-Schluessel. Nach Beschreibung zu gehen waere falsch: "Shipment Being
@@ -923,6 +923,33 @@ function starteSuche() {
   });
 }
 
+// Ist ein Dialog des Portals offen?
+//
+// Verlaesst man einen Auftrag mit ungespeicherten Eingaben, fragt SAP nach, ob
+// verworfen werden soll. Dieser Dialog haelt jeden Wechsel an - der Stapel
+// setzte die Adresse dann immer wieder neu und kam nie weiter. Gemessen wurde,
+// dass der Wechsel an sich funktioniert (3,6 Sekunden), also muss etwas
+// dazwischenstehen.
+function offenerDialog() {
+  for (const w of appWindows()) {
+    try {
+      const all = w.sap.ui.core.Element.registry.all();
+      for (const id in all) {
+        const c = all[id];
+        try {
+          if (!/\.(Dialog|MessageBox)$/.test(c.getMetadata().getName())) continue;
+          if (c.isOpen && c.isOpen()) {
+            let text = '';
+            try { text = (c.getTitle && c.getTitle()) || ''; } catch (e) {}
+            return { titel: String(text).slice(0, 60) || 'ohne Titel' };
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
 // Ein Schritt des Stapellaufs. Wird vom Takt aufgerufen und arbeitet die
 // Warteschlange Auftrag fuer Auftrag ab.
 function stapelSchritt() {
@@ -942,6 +969,11 @@ function stapelSchritt() {
   }
 
   const nr = String(q.liste[q.index]);
+
+  // Dialog offen? Dann nicht weiterklicken, sondern anhalten und es sagen.
+  const dlg = offenerDialog();
+  if (dlg) { zeigeStapelPause(q, nr, dlg); return true; }
+
   zeigeStapelstand(q, nr);
 
   const offen = offenerAuftrag();
@@ -955,6 +987,11 @@ function stapelSchritt() {
     // Versuchen (rund 18 Sekunden) wird der Auftrag uebersprungen und als
     // ungeprueft vermerkt.
     q.versuche = (q.versuche || 0) + 1;
+    // Gemessen: Ein Wechsel braucht rund 3,6 Sekunden, und dazwischen meldet
+    // das Modell GAR NICHTS. Der Takt laeuft alle 1,5 Sekunden - ohne Bremse
+    // wuerde er mitten im Aufbau erneut wechseln und den Vorgang abwuergen.
+    // Deshalb nur bei jedem dritten Versuch die Adresse neu setzen.
+    const jetztWechseln = (q.versuche % 3 === 1);
     if (q.versuche > 12) {
       try {
         const alle = JSON.parse(sessionStorage.getItem(KEY_GEPRUEFT) || '{}');
@@ -972,10 +1009,12 @@ function stapelSchritt() {
       return true;
     }
     merke(KEY_SCHLANGE, q);
-    try {
-      window.top.location.hash = 'ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
-        '&sap-app-origin-hint=&/orderentry?editing=false';
-    } catch (e) {}
+    if (jetztWechseln) {
+      try {
+        window.top.location.hash = 'ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
+          '&sap-app-origin-hint=&/orderentry?editing=false';
+      } catch (e) {}
+    }
     return true;
   }
   q.versuche = 0;
@@ -989,6 +1028,28 @@ function stapelSchritt() {
     stapelLaeuft = false;
   });
   return true;
+}
+
+function zeigeStapelPause(q, nr, dlg) {
+  const b = document.getElementById('sram-ag-body');
+  if (!b) return;
+  b.dataset.ansicht = 'stapel';
+  b.innerHTML =
+    '<div style="font-weight:700;margin-bottom:6px;color:#A02020;">Angehalten – ein Dialog ist offen</div>' +
+    '<div style="background:#FFF4F4;border:1px solid #E0B4B4;border-radius:4px;padding:8px;margin-bottom:9px;">' +
+      'Das Portal fragt gerade etwas (<b>' + esc(dlg.titel) + '</b>). Solange das offen ist, ' +
+      'kann der Agent nicht zum nächsten Auftrag wechseln.<br><br>' +
+      'Bitte den Dialog beantworten – danach läuft der Stapel von selbst weiter.</div>' +
+    '<div style="color:#555;font-size:11px;margin-bottom:9px;">' + q.index + ' von ' + q.liste.length +
+      ' erledigt &middot; wartet auf: <b>' + esc(nr) + '</b></div>' +
+    '<button id="sram-ag-stop" style="font-size:11px;padding:4px 10px;border:1px solid #E0B4B4;' +
+      'background:#FFF6F6;color:#A02020;border-radius:3px;cursor:pointer;">Stapel abbrechen</button>';
+  const s = document.getElementById('sram-ag-stop');
+  if (s) s.addEventListener('click', () => {
+    vergiss(KEY_SCHLANGE); stapelLaeuft = false;
+    const l = hole(KEY_LISTE);
+    if (l && l.zeilen) { gefunden = l.zeilen; zeigeListe(l.treffer); } else zeigeStart();
+  });
 }
 
 function zeigeStapelstand(q, nr) {
