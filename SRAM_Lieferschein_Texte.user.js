@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      5.1.5
+// @version      5.2.0
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -31,7 +31,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '5.1.5';
+const SCRIPT_VERSION = '5.2.0';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -338,6 +338,25 @@ function allDocs() {
 }
 
 // ── Field label mappings: German button label → search terms (DE + EN) ──
+// Sprachunabhaengige Kennungen der Textfelder.
+//
+// Der Suchweg ueber die sichtbare Beschriftung funktioniert nur, solange man
+// die Uebersetzung kennt. Im italienischen Portal heissen die Felder
+// "Promemoria interno", "Nota spedizione" und "Nota testata" - und ein
+// Messversuch ueber die umgebende Formularzeile lieferte dort sogar das
+// FALSCHE Label ("Destinatario merci", also Warenempfaenger).
+//
+// Die ID-Endungen sind dagegen in allen Standorten identisch; der
+// Sicherungs-Teil arbeitet seit jeher damit und tut das in Deutschland,
+// Australien und den USA zuverlaessig. Deshalb wird ab jetzt ZUERST ueber die
+// Kennung gesucht und die Beschriftung nur noch als Rueckfall genutzt.
+// Damit braucht ein neuer Standort keine uebersetzten Suchbegriffe mehr.
+const FIELD_IDS = {
+  'Interne Info':      'internalMemoTextArea',
+  'Versandinformation':'shipNoteTextArea',
+  'Bemerkungen':       'headerNoteTextArea',
+};
+
 const FIELD_SEARCH_TERMS = {
   'Interne Info':      ['Interne Info', 'Internal Memo', 'Internal Note'],
   'Versandinformation':['Versandinformation', 'Shipping Note', 'Shipping Info'],
@@ -349,14 +368,42 @@ const FIELD_SEARCH_TERMS = {
 
 // ── Find a SAP textarea by its visible label text (searches all accessible frames) ──
 function findFieldByLabel(labelText) {
-  const terms = FIELD_SEARCH_TERMS[labelText] || [labelText];
+  // Weg 1: ueber die sprachunabhaengige Kennung
+  const kennung = FIELD_IDS[labelText];
+  if (kennung) {
+    for (const doc of allDocs()) {
+      const treffer = findFieldByIdInDoc(doc, kennung);
+      if (treffer) return treffer;
+    }
+  }
 
+  // Weg 2: ueber die sichtbare Beschriftung - Rueckfall, falls SAP die
+  // Kennungen einmal aendert
+  const terms = FIELD_SEARCH_TERMS[labelText] || [labelText];
   for (const doc of allDocs()) {
     for (const term of terms) {
       const result = findFieldByLabelInDoc(doc, term);
       if (result) return result;
     }
   }
+  return null;
+}
+
+// Sucht ein Textfeld ueber die Endung seiner ID. Der View-Praefix wechselt
+// (__xmlview0, __xmlview2, ...), deshalb wird nur auf die Endung geprueft.
+// SAPUI5 haengt bei Eingabefeldern "-inner" an das eigentliche Element.
+function findFieldByIdInDoc(doc, kennung) {
+  try {
+    const alle = doc.querySelectorAll('textarea, input');
+    for (const el of alle) {
+      const id = el.id || '';
+      if (!id) continue;
+      const basis = id.replace(/-inner$/, '');
+      if (basis.endsWith('--' + kennung) || basis === kennung) {
+        if (isEditableField(el)) return el;
+      }
+    }
+  } catch (e) {}
   return null;
 }
 
@@ -426,6 +473,12 @@ const WRITE_MESSAGE_PATTERNS = [
 ];
 
 function findWriteMessageButton(doc) {
+  // Zuerst ueber die Kennung: Im italienischen Portal heisst der Knopf
+  // "Scrivi messaggio", die Textsuche griffe dort nicht.
+  try {
+    const el = doc.querySelector('[id$="--writeMessageButton"]');
+    if (el) return el;
+  } catch (e) {}
   try {
     const candidates = doc.querySelectorAll('button, a, span[role="button"], div[role="button"], .sapMBtn, [class*="Btn"]');
     for (const el of candidates) {
