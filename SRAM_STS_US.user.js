@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts US
 // @namespace    https://sram.com
-// @version      5.2.0
+// @version      5.2.1
 // @description  Text Assistant for the SRAM B2B Service Portal – United States
 // @author       SRAM STS US
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -21,7 +21,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '5.2.0';
+const SCRIPT_VERSION = '5.2.1';
 
 // ── Shipping locations ────────────────────────────────────────────────
 // Eight snippets contain the shipping address as a placeholder. Instead of
@@ -2563,7 +2563,7 @@ function renderBody() {
   if (!logOpen) {
     h += '';
   } else if (!logArr.length) {
-    h += '<div style="color:#666;background:#F7F7F7;border:1px solid #E5E5E5;border-radius:4px;padding:9px;">Noch nichts protokolliert.</div>';
+    h += '<div style="color:#666;background:#F7F7F7;border:1px solid #E5E5E5;border-radius:4px;padding:9px;">Nothing logged yet.</div>';
   } else {
     h += '<div style="border:1px solid #E5E5E5;border-radius:4px;overflow:hidden;">';
     logArr.slice(0, 20).forEach((e, i) => {
@@ -3338,7 +3338,7 @@ function wireRestoreButton(btn, ziel, key) {
     if (!window.confirm(frage)) return;
 
     btn.disabled = true;
-    ausgeben('<div style="color:#7A5B00;">Wird zurueckgeschrieben...</div>');
+    ausgeben('<div style="color:#7A5B00;">Restoring...</div>');
 
     // 1. Texte
     const textErgebnis = restoreTexts(snap);
@@ -3452,8 +3452,8 @@ function renderDetail(s) {
   } else {
     h += '<table style="width:100%;border-collapse:collapse;font-size:11px;">' +
          '<tr style="background:#F0F0F0;"><th style="text-align:left;padding:3px 4px;">Pos</th><th style="text-align:left;padding:3px 4px;">Material</th>' +
-         '<th style="text-align:left;padding:3px 4px;">Bezeichnung</th><th style="text-align:left;padding:3px 4px;">Mg</th>' +
-         '<th style="text-align:left;padding:3px 4px;">Werk</th><th style="text-align:left;padding:3px 4px;">LOrt</th><th style="text-align:left;padding:3px 4px;">Kat</th></tr>';
+         '<th style="text-align:left;padding:3px 4px;">Description</th><th style="text-align:left;padding:3px 4px;">Qty</th>' +
+         '<th style="text-align:left;padding:3px 4px;">Plant</th><th style="text-align:left;padding:3px 4px;">SLoc</th><th style="text-align:left;padding:3px 4px;">Cat</th></tr>';
     s.items.forEach(it => {
       const nested = !!it._parentItem;
       h += '<tr style="border-bottom:1px solid #EEE;' + (nested ? 'background:#FFFDF2;' : '') + '">' +
@@ -3595,7 +3595,7 @@ if (IS_TOP) {
   }, 5000);
 }
 
-log('geladen · Backup v' + BK_VERSION + ' · Frame:', IS_TOP ? 'oben' : 'App-Frame');
+log('loaded · Backup v' + BK_VERSION + ' · Frame:', IS_TOP ? 'oben' : 'App-Frame');
 
 })();
 // ===== BACKUP-TEIL ENDE =====
