@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      5.1.5
+// @version      5.2.0
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -21,7 +21,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '5.1.5';
+const SCRIPT_VERSION = '5.2.0';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js';
 
 function compareVersions(a, b) {
@@ -215,6 +215,24 @@ function allDocs() {
 }
 
 // ── Field label mappings: German button label → search terms (DE + EN) ──
+// Language independent IDs of the text fields.
+//
+// Searching by the visible label only works as long as the translation is
+// known. In the Italian portal the fields are called "Promemoria interno",
+// "Nota spedizione" and "Nota testata" - and a measurement via the
+// surrounding form row even returned the WRONG label there
+// ("Destinatario merci", i.e. goods recipient).
+//
+// The ID suffixes are identical across all locations; the backup part has
+// always worked with them and does so reliably in Germany, Australia and the
+// US. From now on the ID is tried FIRST and the label only as a fallback.
+// That way a new location needs no translated search terms at all.
+const FIELD_IDS = {
+  'Internal Info':      'internalMemoTextArea',
+  'Shipping Info':'shipNoteTextArea',
+  'Header Note':  'headerNoteTextArea',
+};
+
 const FIELD_SEARCH_TERMS = {
   'Internal Info':     ['Internal Info', 'Internal Memo', 'Internal Note', 'Interne Info'],
   'Shipping Info':     ['Shipping Info', 'Shipping Note', 'Versandinformation'],
@@ -226,14 +244,41 @@ const FIELD_SEARCH_TERMS = {
 
 // ── Find a SAP textarea by its visible label text (searches all accessible frames) ──
 function findFieldByLabel(labelText) {
-  const terms = FIELD_SEARCH_TERMS[labelText] || [labelText];
+  // Route 1: via the language independent ID
+  const kennung = FIELD_IDS[labelText];
+  if (kennung) {
+    for (const doc of allDocs()) {
+      const treffer = findFieldByIdInDoc(doc, kennung);
+      if (treffer) return treffer;
+    }
+  }
 
+  // Route 2: via the visible label - fallback in case SAP ever changes the IDs
+  const terms = FIELD_SEARCH_TERMS[labelText] || [labelText];
   for (const doc of allDocs()) {
     for (const term of terms) {
       const result = findFieldByLabelInDoc(doc, term);
       if (result) return result;
     }
   }
+  return null;
+}
+
+// Finds a text field by the suffix of its ID. The view prefix changes
+// (__xmlview0, __xmlview2, ...), so only the suffix is checked. SAPUI5
+// appends "-inner" to the actual element of an input control.
+function findFieldByIdInDoc(doc, kennung) {
+  try {
+    const alle = doc.querySelectorAll('textarea, input');
+    for (const el of alle) {
+      const id = el.id || '';
+      if (!id) continue;
+      const basis = id.replace(/-inner$/, '');
+      if (basis.endsWith('--' + kennung) || basis === kennung) {
+        if (isEditableField(el)) return el;
+      }
+    }
+  } catch (e) {}
   return null;
 }
 
@@ -294,6 +339,12 @@ function findFieldByLabelInDoc(doc, labelText) {
 // before/after comparison: remember all textareas before the click, then
 // use the newly-appeared (visible) field after opening.
 function findWriteMessageButton(doc) {
+  // Try the ID first: in the Italian portal the button reads
+  // "Scrivi messaggio", so a text search would miss it.
+  try {
+    const el = doc.querySelector('[id$="--writeMessageButton"]');
+    if (el) return el;
+  } catch (e) {}
   try {
     const candidates = doc.querySelectorAll('button, a, span[role="button"], div[role="button"], .sapMBtn, [class*="Btn"]');
     for (const el of candidates) {
