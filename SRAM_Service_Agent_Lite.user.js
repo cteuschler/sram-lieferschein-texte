@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Agent lite (Beta)
 // @namespace    https://sram.com
-// @version      0.7.2
+// @version      0.7.3
 // @description  BETA – KVA-Nachverfolgung für das SRAM B2B Service-Portal (Deutschland)
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -38,7 +38,7 @@
 (function () {
 'use strict';
 
-const VERSION = '0.7.2';
+const VERSION = '0.7.3';
 const IS_TOP = (window === window.top);
 
 // Status-Schluessel. Nach Beschreibung zu gehen waere falsch: "Shipment Being
@@ -948,19 +948,44 @@ function stapelSchritt() {
   if (!offen || offen.nr !== nr.replace(/^0+/, '')) {
     // Noch nicht beim richtigen Auftrag: hinwechseln und im naechsten Takt
     // weitermachen.
+    //
+    // WAECHTER: Manche Auftraege lassen sich nicht oeffnen - das Portal
+    // springt dann zur Liste zurueck. Ohne Grenze versucht es der Takt endlos
+    // weiter, und der Stapel bleibt bei "gerade: 29696359" stehen. Nach 12
+    // Versuchen (rund 18 Sekunden) wird der Auftrag uebersprungen und als
+    // ungeprueft vermerkt.
+    q.versuche = (q.versuche || 0) + 1;
+    if (q.versuche > 12) {
+      try {
+        const alle = JSON.parse(sessionStorage.getItem(KEY_GEPRUEFT) || '{}');
+        const fach = fachName();
+        if (!alle[fach]) alle[fach] = {};
+        alle[fach][nr.replace(/^0+/, '')] = {
+          zeit: Date.now(), tage: null, anzahl: null, letzterSender: null,
+          vonSram: null, nichtGeladen: true, stufe: 'nichtgeoeffnet'
+        };
+        sessionStorage.setItem(KEY_GEPRUEFT, JSON.stringify(alle));
+      } catch (e) {}
+      q.index = (q.index || 0) + 1;
+      q.versuche = 0;
+      merke(KEY_SCHLANGE, q);
+      return true;
+    }
+    merke(KEY_SCHLANGE, q);
     try {
       window.top.location.hash = 'ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
         '&sap-app-origin-hint=&/orderentry?editing=false';
     } catch (e) {}
     return true;
   }
+  q.versuche = 0;
 
   // Richtiger Auftrag ist geladen - auswerten
   stapelLaeuft = true;
   werteAus(nr, res => {
     if (!res.fehler && res.order) { try { geprueffteMerken(res.order, res); } catch (e) {} }
     const q2 = hole(KEY_SCHLANGE);
-    if (q2) { q2.index = (q2.index || 0) + 1; merke(KEY_SCHLANGE, q2); }
+    if (q2) { q2.index = (q2.index || 0) + 1; q2.versuche = 0; merke(KEY_SCHLANGE, q2); }
     stapelLaeuft = false;
   });
   return true;
@@ -975,7 +1000,9 @@ function zeigeStapelstand(q, nr) {
   b.innerHTML =
     '<div style="font-weight:700;margin-bottom:6px;">Alle Aufträge werden geprüft</div>' +
     '<div style="color:#555;margin-bottom:8px;">' + fertig + ' von ' + gesamt + ' erledigt &middot; ' +
-      'gerade: <b>' + esc(nr) + '</b></div>' +
+      'gerade: <b>' + esc(nr) + '</b>' +
+      ((q.versuche || 0) > 3 ? ' <span style="color:#B4780D;">(' + q.versuche +
+        '. Versuch – wird nach 12 übersprungen)</span>' : '') + '</div>' +
     '<div style="height:8px;background:#EEE;border-radius:4px;overflow:hidden;margin-bottom:10px;">' +
       '<div style="height:100%;width:' + anteil + '%;background:#E31836;"></div></div>' +
     '<div style="font-size:10.5px;color:#888;margin-bottom:9px;">Der Agent springt dabei durch die ' +
@@ -1056,7 +1083,7 @@ function zeigeListe(treffer) {
     if (g) {
       // Geprueft: gruen, wenn nichts zu tun ist oder der Haendler geantwortet
       // hat. Sonst bleibt die Warnfarbe stehen - erledigt ist es ja nicht.
-      if (g.stufe === 'nichtgeladen') farbe = '#B4780D';      // nicht gruen!
+      if (g.stufe === 'nichtgeladen' || g.stufe === 'nichtgeoeffnet') farbe = '#B4780D';   // nicht gruen!
       else if (g.stufe === 'warten' || g.vonSram === false) farbe = '#1D9E75';
     }
     h += '<div class="sram-ag-karte" data-nr="' + esc(z.order) + '" style="border:1px solid ' +
@@ -1066,7 +1093,8 @@ function zeigeListe(treffer) {
         '<b style="font-size:12.5px;">' + esc(z.order) + '</b>' +
         '<span style="color:' + farbe + ';font-size:11px;font-weight:700;">' + alt + ' Werktage</span>' +
         (g ? '<span style="background:' + farbe + ';color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">' +
-              (g.stufe === 'nichtgeladen' ? 'Korrespondenz nicht geladen'
+              (g.stufe === 'nichtgeoeffnet' ? 'ließ sich nicht öffnen'
+               : g.stufe === 'nichtgeladen' ? 'Korrespondenz nicht geladen'
                : g.stufe === 'rueck' ? 'Rückversand fällig'
                : g.stufe === 'erinnern' ? 'Erinnerung fällig'
                : g.vonSram === false ? 'Händler hat geantwortet'
