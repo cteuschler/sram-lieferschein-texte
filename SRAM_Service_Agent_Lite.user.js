@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Agent lite (Beta)
 // @namespace    https://sram.com
-// @version      0.8.0
+// @version      0.9.0
 // @description  BETA – KVA-Nachverfolgung für das SRAM B2B Service-Portal (Deutschland)
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -38,7 +38,7 @@
 (function () {
 'use strict';
 
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 const IS_TOP = (window === window.top);
 
 // Status-Schluessel. Nach Beschreibung zu gehen waere falsch: "Shipment Being
@@ -961,6 +961,14 @@ function stapelSchritt() {
   if (q.index >= q.liste.length) {
     vergiss(KEY_SCHLANGE);
     stapelLaeuft = false;
+    // Kurz den Abschluss zeigen, damit nicht der Eindruck entsteht, es sei
+    // mittendrin stehen geblieben.
+    const bb = document.getElementById('sram-ag-body');
+    if (bb) {
+      bb.dataset.ansicht = 'stapel';
+      bb.innerHTML = '<div style="color:#1A7A45;font-weight:700;">Alle ' + q.liste.length +
+        ' Aufträge geprüft.</div><div style="color:#555;margin-top:5px;">Die Liste wird geladen …</div>';
+    }
     // Zurueck zur Liste, damit man das Ergebnis sieht
     if (!byIdSuffix(null, 'smartFilterBar')) { zurListe(); return true; }
     const l = hole(KEY_LISTE);
@@ -987,12 +995,25 @@ function stapelSchritt() {
     // Versuchen (rund 18 Sekunden) wird der Auftrag uebersprungen und als
     // ungeprueft vermerkt.
     q.versuche = (q.versuche || 0) + 1;
-    // Gemessen: Ein Wechsel braucht rund 3,6 Sekunden, und dazwischen meldet
-    // das Modell GAR NICHTS. Der Takt laeuft alle 1,5 Sekunden - ohne Bremse
-    // wuerde er mitten im Aufbau erneut wechseln und den Vorgang abwuergen.
-    // Deshalb nur bei jedem dritten Versuch die Adresse neu setzen.
-    const jetztWechseln = (q.versuche % 3 === 1);
-    if (q.versuche > 12) {
+
+    // GEDULD statt Takt. Der vorige Ansatz hat sich selbst sabotiert: Alle 4,5
+    // Sekunden wurde erneut gewechselt, und weil die Adresse dann schon stimmte,
+    // loeste das ein Neuladen aus - mitten im laufenden Aufbau. Die Seite fing
+    // immer wieder von vorne an und wurde nie fertig; der Waechter meldete
+    // "liess sich nicht oeffnen", obwohl der Auftrag voellig in Ordnung war.
+    //
+    // Jetzt wird nach einem Versuch 15 Sekunden gewartet, bevor ueberhaupt ein
+    // zweiter folgt. Gemessen braucht ein Wechsel 3,6 Sekunden, ein Neuladen
+    // laenger - 15 Sekunden sind reichlich, aber lieber zu geduldig als eine
+    // Endlosschleife.
+    const jetzt = Date.now();
+    const seitLetztem = jetzt - (q.letzterVersuch || 0);
+    const jetztWechseln = (seitLetztem > 15000);
+    if (jetztWechseln) q.letzterVersuch = jetzt;
+
+    // Aufgeben erst nach 3 echten Versuchen, also rund 45 Sekunden.
+    q.echteVersuche = (q.echteVersuche || 0) + (jetztWechseln ? 1 : 0);
+    if (q.echteVersuche > 3) {
       try {
         const alle = JSON.parse(sessionStorage.getItem(KEY_GEPRUEFT) || '{}');
         const fach = fachName();
@@ -1005,14 +1026,27 @@ function stapelSchritt() {
       } catch (e) {}
       q.index = (q.index || 0) + 1;
       q.versuche = 0;
+      q.echteVersuche = 0;
+      q.letzterVersuch = 0;
       merke(KEY_SCHLANGE, q);
       return true;
     }
     merke(KEY_SCHLANGE, q);
     if (jetztWechseln) {
+      const ziel = 'ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
+                   '&sap-app-origin-hint=&/orderentry?editing=false';
       try {
-        window.top.location.hash = 'ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
-          '&sap-app-origin-hint=&/orderentry?editing=false';
+        const jetzigeNr = (String(window.top.location.hash).match(/Order=(\d+)/) || [])[1];
+        if (jetzigeNr && jetzigeNr.replace(/^0+/, '') === nr.replace(/^0+/, '')) {
+          // Die Adresse zeigt BEREITS auf diesen Auftrag, die Anwendung steht
+          // aber woanders. Sie erneut auf denselben Wert zu setzen loest im
+          // Browser NICHTS aus - kein Ereignis, kein Wechsel. Genau daran blieb
+          // der Stapel haengen: Adresse und Anzeige fanden nie zueinander.
+          // Hier hilft nur ein echtes Neuladen.
+          window.top.location.reload();
+        } else {
+          window.top.location.hash = ziel;
+        }
       } catch (e) {}
     }
     return true;
@@ -1024,7 +1058,8 @@ function stapelSchritt() {
   werteAus(nr, res => {
     if (!res.fehler && res.order) { try { geprueffteMerken(res.order, res); } catch (e) {} }
     const q2 = hole(KEY_SCHLANGE);
-    if (q2) { q2.index = (q2.index || 0) + 1; q2.versuche = 0; merke(KEY_SCHLANGE, q2); }
+    if (q2) { q2.index = (q2.index || 0) + 1; q2.versuche = 0; q2.echteVersuche = 0;
+              q2.letzterVersuch = 0; merke(KEY_SCHLANGE, q2); }
     stapelLaeuft = false;
   });
   return true;
@@ -1062,8 +1097,8 @@ function zeigeStapelstand(q, nr) {
     '<div style="font-weight:700;margin-bottom:6px;">Alle Aufträge werden geprüft</div>' +
     '<div style="color:#555;margin-bottom:8px;">' + fertig + ' von ' + gesamt + ' erledigt &middot; ' +
       'gerade: <b>' + esc(nr) + '</b>' +
-      ((q.versuche || 0) > 3 ? ' <span style="color:#B4780D;">(' + q.versuche +
-        '. Versuch – wird nach 12 übersprungen)</span>' : '') + '</div>' +
+      ((q.echteVersuche || 0) > 1 ? ' <span style="color:#B4780D;">(' + q.echteVersuche +
+        '. Anlauf von 3)</span>' : '') + '</div>' +
     '<div style="height:8px;background:#EEE;border-radius:4px;overflow:hidden;margin-bottom:10px;">' +
       '<div style="height:100%;width:' + anteil + '%;background:#E31836;"></div></div>' +
     '<div style="font-size:10.5px;color:#888;margin-bottom:9px;">Der Agent springt dabei durch die ' +
@@ -1401,6 +1436,23 @@ if (IS_TOP) {
         if (!panel) bauePanel();
         stapelSchritt();
         return;
+      }
+
+      // Stapel fertig, aber die Fortschrittsanzeige steht noch?
+      //
+      // GENAU HIER lag der vermeintliche Haenger: Der Stapel lief durch, die
+      // Warteschlange wurde geleert - aber niemand zeichnete das Panel neu.
+      // Sichtbar blieb der letzte Fortschritt, meist "6 von 7", weil die
+      // Anzeige VOR der letzten Erhoehung entstand. Es sah nach Stillstand aus,
+      // obwohl alles erledigt war.
+      if (panel) {
+        const bk = document.getElementById('sram-ag-body');
+        if (bk && bk.dataset.ansicht === 'stapel') {
+          const l = hole(KEY_LISTE);
+          if (l && l.zeilen && l.zeilen.length) { gefunden = l.zeilen; zeigeListe(l.treffer); }
+          else zeigeStart();
+          return;
+        }
       }
 
       // Panel nach einem Seitenwechsel wieder aufbauen, wenn es vorher offen
