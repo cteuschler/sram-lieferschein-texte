@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Agent lite (Beta)
 // @namespace    https://sram.com
-// @version      0.9.0
+// @version      0.13.0
 // @description  BETA – KVA-Nachverfolgung für das SRAM B2B Service-Portal (Deutschland)
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -38,13 +38,18 @@
 (function () {
 'use strict';
 
-const VERSION = '0.9.0';
+const VERSION = '0.13.0';
 const IS_TOP = (window === window.top);
 
 // Status-Schluessel. Nach Beschreibung zu gehen waere falsch: "Shipment Being
 // Prepared" gibt es zweimal, als SHBP (E0008) und als SBP (E0010).
 const STATUS_COM = 'E0005';
 const STATUS_SBP = 'E0010';
+// Teileverfuegbarkeit: beide Wartezustaende.
+//   E0007 = Waiting for Service Items (WFSI)
+//   E0009 = Waiting for Parts (WFP)
+// ACHTUNG: E0007 ist NICHT WFP - das war eine naheliegende Verwechslung.
+const STATUS_TEILE = ['E0007', 'E0009'];
 
 const SALES_ORG = '0047';          // Deutschland
 const FRIST_ERINNERUNG = 4;        // ab so vielen Werktagen: Erinnerung
@@ -287,6 +292,29 @@ function fmtDatum(d) {
   } catch (e) { return '–'; }
 }
 
+// Auftragsnummer als Verweis - wie im Sicherungs-Panel. Dort hat sich das
+// bewaehrt: man sieht einen Fall und ist mit einem Klick drin.
+function nummerVerweis(nr) {
+  return '<a href="#" class="sram-ag-goto" data-nr="' + esc(nr) + '" ' +
+    'style="font-size:12.5px;font-weight:700;color:#E31836;text-decoration:underline;' +
+    'cursor:pointer;">' + esc(nr) + '</a>';
+}
+
+// Verweise in einem Bereich verdrahten
+function verdrahteVerweise(bereich) {
+  bereich.querySelectorAll('.sram-ag-goto').forEach(a => {
+    a.addEventListener('mousedown', e => e.preventDefault());
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      const nr = a.getAttribute('data-nr');
+      try {
+        window.top.location.hash = 'ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
+          '&sap-app-origin-hint=&/orderentry?editing=false';
+      } catch (err) {}
+    });
+  });
+}
+
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -375,6 +403,84 @@ function sucheAuftraege(fertig) {
     }
     setTimeout(warte, 400);
   })();
+}
+
+// Teileverfuegbarkeit aus der LISTE lesen.
+//
+// Der Weg ueber "Edit" und "Check Deliv. and Pricing" waere der naheliegende
+// gewesen - und der falsche: Er braucht den Bearbeitungsmodus, sperrt den
+// Auftrag fuer Kollegen, rechnet Preise neu und kostet pro Auftrag ueber zehn
+// Sekunden. Gemessen steht das Lieferdatum aber bereits als NextDeliveryDate
+// in der Auftragsliste, bei 46 von 60 geladenen Auftraegen. Damit genuegt eine
+// einzige Abfrage ohne jeden Eingriff.
+function sucheTeile(fertig) {
+  const fb = byIdSuffix(null, 'smartFilterBar');
+  const tbl = byIdSuffix(null, 'orderTable');
+  if (!fb || !tbl) { fertig({ fehler: 'Diese Ansicht hat keine Auftragsliste.' }); return; }
+  const ident = aktiveKennung();
+  if (!ident) { fertig({ fehler: 'Keine Kennung hinterlegt.' }); return; }
+
+  const daten = {
+    HeaderStatusKey: { items: STATUS_TEILE.map(k => ({ key: k })) },
+    SalesOrganization: { ranges: [{ exclude: false, operation: 'EQ',
+      keyField: 'SalesOrganization', value1: SALES_ORG, value2: null }] }
+  };
+  const feld = (ident.art === 'nummer') ? 'EmployeePartner' : 'EmployeeName';
+  daten[feld] = { ranges: [{ exclude: false, operation: 'EQ',
+    keyField: feld, value1: ident.wert, value2: null }] };
+
+  try { fb.setFilterData(daten, true); } catch (e) { fertig({ fehler: 'Filter konnten nicht gesetzt werden.' }); return; }
+  try { fb.search(); } catch (e) {}
+
+  const b = tbl.getBinding('rows') || tbl.getBinding('items');
+  let vorher = -1, ruhig = 0, versuche = 0;
+  (function warte() {
+    versuche++;
+    const jetzt = b.getLength ? b.getLength() : 0;
+    if (jetzt === vorher) ruhig++; else { ruhig = 0; vorher = jetzt; }
+    if (ruhig >= 3 || versuche > 40) {
+      const ctxs = b.getContexts(0, 300) || [];
+      const zeilen = ctxs.map(c => {
+        const o = c.getObject() || {};
+        return {
+          order: o.Order,
+          status: o.HeaderStatusDescription || '',
+          kunde: o.ShipToName || '',
+          ref: o.ExternalReference || '',
+          datum: o.NextDeliveryDate || null,
+          tage: tageBis(o.NextDeliveryDate)
+        };
+      });
+      merke(KEY_TEILELISTE, { treffer: b.getLength ? b.getLength() : zeilen.length, zeilen: zeilen });
+      fertig({ treffer: b.getLength ? b.getLength() : zeilen.length, zeilen: zeilen });
+      return;
+    }
+    setTimeout(warte, 400);
+  })();
+}
+
+// Kalendertage bis zum Datum. Negative Zahl = liegt in der Vergangenheit.
+function tageBis(d) {
+  if (!d) return null;
+  const x = new Date(d);
+  if (isNaN(x.getTime())) return null;
+  const heute = new Date();
+  heute.setHours(0, 0, 0, 0);
+  const ziel = new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  return Math.round((ziel - heute) / 86400000);
+}
+
+// Ampel. Gemessen lagen die meisten Lieferdaten in der VERGANGENHEIT
+// (-3, -4, -5 Tage). Eine Regel "bis 2 Tage = gruen" haette 43 von 46
+// Auftraegen gruen gefaerbt, obwohl bei ihnen der Termin laengst verstrichen
+// ist und der Auftrag immer noch wartet - also gerade die Faelle, die jemand
+// ansehen sollte. Deshalb bekommt die Vergangenheit eine eigene Stufe.
+function teileAmpel(tage) {
+  if (tage == null) return { farbe: '#9A9A9A', text: 'kein Termin' };
+  if (tage < 0)     return { farbe: '#C62828', text: 'überfällig seit ' + Math.abs(tage) + ' Tagen' };
+  if (tage <= 2)    return { farbe: '#1D9E75', text: tage === 0 ? 'heute' : 'in ' + tage + ' Tagen' };
+  if (tage <= 14)   return { farbe: '#B4780D', text: 'in ' + tage + ' Tagen' };
+  return { farbe: '#C62828', text: 'in ' + tage + ' Tagen' };
 }
 
 // ── Einen Auftrag pruefen ────────────────────────────────────────────────
@@ -513,6 +619,125 @@ function pruefeAuftrag(nr, fertig) {
                '&sap-app-origin-hint=&/orderentry?editing=false';
   try { window.top.location.hash = ziel; } catch (e) { fertig({ fehler: 'Wechsel nicht möglich' }); return; }
   setTimeout(() => werteAus(nr, fertig), 1200);
+}
+
+// ── Teileverfuegbarkeit: genaue Pruefung je Auftrag ──────────────────────
+//
+// Warum der Umweg noetig ist, obwohl die Liste ein Lieferdatum fuehrt:
+// Gemessen und vom Fachbereich bestaetigt - das gespeicherte Datum ist
+// unbrauchbar. Bei Auftrag 29695225 stand dort der 29. Oktober, also
+// "ueberfaellig", waehrend das Teil tatsaechlich am Lager liegt. Erst
+// "Check Deliv. and Pricing" (Kennung simulateButton) rechnet den echten
+// Termin, und dieser Wert wird beim Speichern NICHT festgeschrieben - das
+// Backend schickt den alten zurueck. Er ist also fluechtig und muss hier
+// gemerkt werden.
+//
+// Der Knopf ist dabei harmlos: Er veraendert nichts Dauerhaftes, und ohne
+// Service-Material im Auftrag bleibt er wirkungslos. Verlassen wird der
+// Auftrag ueber "Display", gespeichert wird nie.
+const KEY_TEILE = 'sramAgentTeile';
+const KEY_TEILELISTE = 'sramAgentTeileListe';
+
+function teileLesen() {
+  try { return JSON.parse(sessionStorage.getItem(KEY_TEILE) || '{}'); } catch (e) { return {}; }
+}
+function teileMerken(nr, datum, quelle) {
+  try {
+    const alle = teileLesen();
+    alle[String(nr).replace(/^0+/, '')] = {
+      zeit: Date.now(), datum: datum || null, tage: tageBis(datum), quelle: quelle || 'berechnet'
+    };
+    sessionStorage.setItem(KEY_TEILE, JSON.stringify(alle));
+  } catch (e) {}
+}
+
+// Das Lieferdatum der Service-Materialien. Massgeblich ist der Nachtrag, nicht
+// die Produktzeile - auf das Teil wird ja gewartet, nicht auf die Gabel.
+function lieferdatumAusModell() {
+  const m = orderModel(null);
+  const d = m && m.getData ? m.getData() : null;
+  if (!d) return null;
+  let spaetestes = null;
+  (d.Items || []).forEach(it => {
+    (it.Actuals || []).forEach(a => {
+      const x = a.ConfirmedDeliveryDate;
+      if (x && (!spaetestes || new Date(x) > new Date(spaetestes))) spaetestes = x;
+    });
+  });
+  // Kein Nachtrag vorhanden? Dann die Produktzeile nehmen.
+  if (!spaetestes) {
+    (d.Items || []).forEach(it => {
+      const x = it.ConfirmedDeliveryDate;
+      if (x && (!spaetestes || new Date(x) > new Date(spaetestes))) spaetestes = x;
+    });
+  }
+  return spaetestes;
+}
+
+// Den Auftrag wieder verlassen, ohne zu speichern.
+function zurueckZuDisplay() {
+  let b = byIdSuffix(null, 'displayButton');
+  if (!b) {
+    for (const w of appWindows()) {
+      try {
+        const all = w.sap.ui.core.Element.registry.all();
+        for (const id in all) {
+          const c = all[id];
+          try {
+            if (!/Button$/.test(c.getMetadata().getName())) continue;
+            if (((c.getText && c.getText()) || '').trim() === 'Display') { b = c; break; }
+          } catch (e) {}
+        }
+      } catch (e) {}
+      if (b) break;
+    }
+  }
+  if (b) { try { b.firePress(); return true; } catch (e) {} }
+  return false;
+}
+
+// Im GEOEFFNETEN Auftrag: Edit, rechnen lassen, Datum ablesen, zurueck.
+function pruefeTeileHier(nr, fertig) {
+  const vorher = lieferdatumAusModell();
+
+  const edit = byIdSuffix(null, 'editButton');
+  const editSichtbar = (() => {
+    const d = edit && edit.getDomRef && edit.getDomRef();
+    const r = d ? d.getBoundingClientRect() : null;
+    return !!(r && (r.width || r.height));
+  })();
+  if (editSichtbar) { try { edit.firePress(); } catch (e) {} }
+
+  setTimeout(() => {
+    const sim = byIdSuffix(null, 'simulateButton');
+    const simSichtbar = (() => {
+      const d = sim && sim.getDomRef && sim.getDomRef();
+      const r = d ? d.getBoundingClientRect() : null;
+      return !!(r && (r.width || r.height));
+    })();
+    if (!sim || !simSichtbar) {
+      fertig({ fehler: 'Prüfknopf nicht verfügbar – ist der Auftrag im Bearbeitungsmodus?' });
+      return;
+    }
+    try { sim.firePress(); } catch (e) {}
+
+    // Auf das Ergebnis warten. Gemessen antwortet der Knopf in gut einer
+    // Sekunde; bis zu acht Sekunden sind reichlich bemessen.
+    let n = 0;
+    (function warte() {
+      n++;
+      const jetzt = lieferdatumAusModell();
+      const geaendert = jetzt && String(jetzt) !== String(vorher);
+      if (geaendert || n > 16) {
+        teileMerken(nr, jetzt, geaendert ? 'berechnet' : 'bestätigt');
+        zurueckZuDisplay();
+        fertig({ order: nr, vorher: vorher, nachher: jetzt, geaendert: !!geaendert,
+                 tage: tageBis(jetzt) });
+        return;
+      }
+      setTimeout(warte, 500);
+    })();
+  }, editSichtbar ? 5000 : 500);
 }
 
 // ── Schreiben ────────────────────────────────────────────────────────────
@@ -872,7 +1097,14 @@ function zeigeStart() {
         'border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;font-family:Arial,Helvetica,sans-serif;">' +
         'Offene KVA suchen</button>' +
       '<div style="margin-top:9px;font-size:10.5px;color:#888;">Der Filter in der Auftragsliste wird dabei ' +
-        'überschrieben. Wer dort eine eigene Einstellung hatte, muss sie danach neu setzen.</div>';
+        'überschrieben. Wer dort eine eigene Einstellung hatte, muss sie danach neu setzen.</div>' +
+      '<div style="margin-top:12px;padding-top:11px;border-top:1px solid #E5E5E5;">' +
+        '<div style="color:#555;margin-bottom:7px;">Oder: <b>Teileverfügbarkeit</b> für Aufträge in ' +
+          'WFSI und WFP – zeigt das Lieferdatum aus der Liste, ohne einen Auftrag zu öffnen.</div>' +
+        '<button id="sram-ag-teile" style="width:100%;padding:9px;background:#FFFFFF;color:#454545;' +
+          'border:1px solid #C7C7C7;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;' +
+          'font-family:Arial,Helvetica,sans-serif;">Teileverfügbarkeit prüfen</button>' +
+      '</div>';
   } else {
     h += '<div style="color:#555;margin-bottom:8px;">Für die Suche nach offenen KVA wird die Auftragsliste ' +
       'gebraucht. In einem geöffneten Auftrag ist sie nicht geladen.</div>' +
@@ -894,6 +1126,22 @@ function zeigeStart() {
     bg.addEventListener('mousedown', e => e.preventDefault());
     bg.addEventListener('click', starteSuche);
   }
+  const bt = document.getElementById('sram-ag-teile');
+  if (bt) {
+    bt.addEventListener('mousedown', e => e.preventDefault());
+    bt.addEventListener('click', () => {
+      const bb = document.getElementById('sram-ag-body');
+      if (bb) bb.innerHTML = '<div style="color:#7A5B00;">Lieferdaten werden gelesen …</div>';
+      sucheTeile(res => {
+        if (res.fehler) {
+          if (bb) bb.innerHTML = '<div style="color:#C62828;">' + esc(res.fehler) + '</div>';
+          return;
+        }
+        zeigeTeile(res.treffer, res.zeilen);
+      });
+    });
+  }
+
   const bl = document.getElementById('sram-ag-liste');
   if (bl) {
     bl.addEventListener('mousedown', e => e.preventDefault());
@@ -970,6 +1218,12 @@ function stapelSchritt() {
         ' Aufträge geprüft.</div><div style="color:#555;margin-top:5px;">Die Liste wird geladen …</div>';
     }
     // Zurueck zur Liste, damit man das Ergebnis sieht
+    if (q.modus === 'teile') {
+      const lt = hole(KEY_TEILELISTE);
+      if (lt && lt.zeilen) { zeigeTeile(lt.treffer, lt.zeilen); return true; }
+      zeigeStart();
+      return true;
+    }
     if (!byIdSuffix(null, 'smartFilterBar')) { zurListe(); return true; }
     const l = hole(KEY_LISTE);
     if (l && l.zeilen) { gefunden = l.zeilen; zeigeListe(l.treffer); }
@@ -1053,16 +1307,142 @@ function stapelSchritt() {
   }
   q.versuche = 0;
 
-  // Richtiger Auftrag ist geladen - auswerten
+  // Richtiger Auftrag ist geladen - auswerten.
+  // Zwei Betriebsarten: 'kva' liest die Korrespondenz, 'teile' laesst das
+  // Lieferdatum berechnen. Letzteres braucht den Bearbeitungsmodus und
+  // dauert deutlich laenger.
   stapelLaeuft = true;
-  werteAus(nr, res => {
-    if (!res.fehler && res.order) { try { geprueffteMerken(res.order, res); } catch (e) {} }
+  const weiter = () => {
     const q2 = hole(KEY_SCHLANGE);
     if (q2) { q2.index = (q2.index || 0) + 1; q2.versuche = 0; q2.echteVersuche = 0;
               q2.letzterVersuch = 0; merke(KEY_SCHLANGE, q2); }
     stapelLaeuft = false;
-  });
+  };
+  if (q.modus === 'teile') {
+    pruefeTeileHier(nr, () => weiter());
+  } else {
+    werteAus(nr, res => {
+      if (!res.fehler && res.order) { try { geprueffteMerken(res.order, res); } catch (e) {} }
+      weiter();
+    });
+  }
   return true;
+}
+
+function zeigeTeile(treffer, zeilen) {
+  const b = document.getElementById('sram-ag-body');
+  if (!b) return;
+  b.dataset.ansicht = 'teile';
+
+  // Aelteste Termine zuerst - ueberfaellige nach oben, denn die brauchen
+  // Aufmerksamkeit. Auftraege ohne Termin ganz ans Ende.
+  const liste = [...zeilen].sort((x, y) => {
+    if (x.tage == null && y.tage == null) return 0;
+    if (x.tage == null) return 1;
+    if (y.tage == null) return -1;
+    return x.tage - y.tage;
+  });
+
+  const zaehl = {
+    ueberfaellig: liste.filter(z => z.tage != null && z.tage < 0).length,
+    bald:         liste.filter(z => z.tage != null && z.tage >= 0 && z.tage <= 2).length,
+    mittel:       liste.filter(z => z.tage != null && z.tage > 2 && z.tage <= 14).length,
+    spaet:        liste.filter(z => z.tage != null && z.tage > 14).length,
+    ohne:         liste.filter(z => z.tage == null).length
+  };
+
+  let h = '<div style="margin-bottom:8px;color:#555;">' + liste.length + ' von ' + treffer +
+    ' Aufträgen in <b>WFSI</b> und <b>WFP</b> geladen. Das Lieferdatum stammt aus der Auftragsliste – ' +
+    'es wurde nichts geöffnet und nichts verändert.</div>';
+
+  const offeneTeile = liste.filter(z => !teileLesen()[String(z.order).replace(/^0+/, '')]);
+  if (offeneTeile.length) {
+    const dauer = Math.ceil(offeneTeile.length * 15 / 60);
+    h += '<div style="margin-bottom:10px;">' +
+      '<button id="sram-ag-alleteile" style="font-size:11.5px;padding:7px 12px;background:#E31836;' +
+        'color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:700;' +
+        'font-family:Arial,Helvetica,sans-serif;">Alle ' + offeneTeile.length + ' genau prüfen</button>' +
+      '<span style="font-size:10.5px;color:#888;margin-left:8px;">rund ' + dauer + ' Minute' +
+        (dauer === 1 ? '' : 'n') + ' – jeder Auftrag wird kurz geöffnet</span></div>';
+  }
+
+  h += '<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:10px;padding-bottom:9px;' +
+       'border-bottom:1px solid #E5E5E5;font-size:10.5px;">' +
+    (zaehl.ueberfaellig ? '<span style="background:#C62828;color:#fff;padding:2px 7px;border-radius:3px;font-weight:700;">' + zaehl.ueberfaellig + ' überfällig</span>' : '') +
+    (zaehl.bald ? '<span style="background:#1D9E75;color:#fff;padding:2px 7px;border-radius:3px;font-weight:700;">' + zaehl.bald + ' bis 2 Tage</span>' : '') +
+    (zaehl.mittel ? '<span style="background:#B4780D;color:#fff;padding:2px 7px;border-radius:3px;font-weight:700;">' + zaehl.mittel + ' bis 14 Tage</span>' : '') +
+    (zaehl.spaet ? '<span style="background:#C62828;color:#fff;padding:2px 7px;border-radius:3px;font-weight:700;">' + zaehl.spaet + ' später</span>' : '') +
+    (zaehl.ohne ? '<span style="background:#9A9A9A;color:#fff;padding:2px 7px;border-radius:3px;">' + zaehl.ohne + ' ohne Termin</span>' : '') +
+    '</div>';
+
+  const berechnet = teileLesen();
+  liste.forEach(z => {
+    const g = berechnet[String(z.order).replace(/^0+/, '')];
+    // Der berechnete Wert zaehlt, der gespeicherte ist nur ein Anhaltspunkt.
+    const tage = g ? g.tage : z.tage;
+    const a = teileAmpel(tage);
+    h += '<div style="border:1px solid ' + (g ? '#CFE8DA' : '#E5E5E5') + ';background:' +
+         (g ? '#FBFEFC' : '#fff') + ';border-left:3px solid ' + a.farbe + ';border-radius:4px;' +
+         'padding:7px 9px;margin-bottom:6px;">' +
+      '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">' +
+        nummerVerweis(z.order) +
+        '<span style="color:' + a.farbe + ';font-size:11px;font-weight:700;">' + esc(a.text) + '</span>' +
+        (g ? '<span style="font-size:9.5px;background:#1D9E75;color:#fff;padding:1px 5px;border-radius:3px;' +
+             'font-weight:700;">berechnet</span>'
+           : '<span style="font-size:9.5px;color:#9A9A9A;">gespeichert, ungeprüft</span>') +
+        '<button class="sram-ag-teilpruef" data-nr="' + esc(z.order) + '" style="margin-left:auto;' +
+          'font-size:10.5px;padding:3px 9px;border:1px solid #C7C7C7;background:#F7F7F7;' +
+          'border-radius:3px;cursor:pointer;">' + (g ? 'erneut' : 'genau prüfen') + '</button>' +
+      '</div>' +
+      '<div style="color:#8A8A8A;font-size:10.5px;margin-top:2px;">' +
+        esc(z.kunde) + (z.ref ? ' &middot; ' + esc(z.ref) : '') +
+        ' &middot; ' + esc(z.status) +
+        (g && g.datum ? ' &middot; Termin ' + fmtDatum(g.datum) : (z.datum ? ' &middot; gespeichert ' + fmtDatum(z.datum) : '')) +
+      '</div></div>';
+  });
+
+  h += '<div style="margin-top:10px;"><button id="sram-ag-back" style="font-size:11px;padding:4px 10px;' +
+       'border:1px solid #C7C7C7;background:#F7F7F7;border-radius:3px;cursor:pointer;">Zurück</button></div>';
+  b.innerHTML = h;
+  verdrahteVerweise(b);
+  const at = document.getElementById('sram-ag-alleteile');
+  if (at) {
+    at.addEventListener('mousedown', e => e.preventDefault());
+    at.addEventListener('click', () => {
+      const nummern = offeneTeile.map(z => z.order);
+      const dauer = Math.ceil(nummern.length * 15 / 60);
+      let frage = 'Lieferdatum für ' + nummern.length + ' Aufträge berechnen?\n\n' +
+        'Jeder Auftrag wird geöffnet, kurz in den Bearbeitungsmodus genommen, das Datum ' +
+        'berechnet und wieder verlassen. Gespeichert wird nichts.\n\n' +
+        'Dauer etwa ' + dauer + ' Minute(n).';
+      if (nummern.length > 20) {
+        frage += '\n\nACHTUNG: Das sind viele. Während der Prüfung ist jeder Auftrag kurz ' +
+          'für Kollegen gesperrt. Vielleicht erst mit wenigen anfangen.';
+      }
+      if (!window.confirm(frage)) return;
+      merke(KEY_SCHLANGE, { aktiv: true, index: 0, liste: nummern, modus: 'teile' });
+      stapelSchritt();
+    });
+  }
+
+  b.querySelectorAll('.sram-ag-teilpruef').forEach(btn => {
+    btn.addEventListener('mousedown', e => e.preventDefault());
+    btn.addEventListener('click', () => {
+      const nr = btn.getAttribute('data-nr');
+      if (!window.confirm('Auftrag ' + nr + ' genau prüfen?\n\n' +
+          'Der Agent öffnet ihn, geht kurz in den Bearbeitungsmodus, lässt das Lieferdatum ' +
+          'berechnen und verlässt ihn wieder über „Display“.\n\n' +
+          'Gespeichert wird nichts – der berechnete Termin bleibt ohnehin nicht im Auftrag, ' +
+          'deshalb merkt ihn der Agent selbst.\n\nFortfahren?')) return;
+      merke('sramAgentTeilZiel', nr);
+      try {
+        window.top.location.hash = 'ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
+          '&sap-app-origin-hint=&/orderentry?editing=false';
+      } catch (e) {}
+    });
+  });
+  const zb = document.getElementById('sram-ag-back');
+  if (zb) zb.addEventListener('click', zeigeStart);
 }
 
 function zeigeStapelPause(q, nr, dlg) {
@@ -1094,7 +1474,8 @@ function zeigeStapelstand(q, nr) {
   const fertig = q.index, gesamt = q.liste.length;
   const anteil = Math.round(fertig / gesamt * 100);
   b.innerHTML =
-    '<div style="font-weight:700;margin-bottom:6px;">Alle Aufträge werden geprüft</div>' +
+    '<div style="font-weight:700;margin-bottom:6px;">' +
+      (q.modus === 'teile' ? 'Lieferdaten werden berechnet' : 'Alle Aufträge werden geprüft') + '</div>' +
     '<div style="color:#555;margin-bottom:8px;">' + fertig + ' von ' + gesamt + ' erledigt &middot; ' +
       'gerade: <b>' + esc(nr) + '</b>' +
       ((q.echteVersuche || 0) > 1 ? ' <span style="color:#B4780D;">(' + q.echteVersuche +
@@ -1186,7 +1567,7 @@ function zeigeListe(treffer) {
          (g ? '#CFE8DA' : '#E5E5E5') + ';background:' + (g ? '#FBFEFC' : '#fff') + ';' +
          'border-left:3px solid ' + farbe + ';border-radius:4px;padding:7px 9px;margin-bottom:6px;">' +
       '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">' +
-        '<b style="font-size:12.5px;">' + esc(z.order) + '</b>' +
+        nummerVerweis(z.order) +
         '<span style="color:' + farbe + ';font-size:11px;font-weight:700;">' + alt + ' Werktage</span>' +
         (g ? '<span style="background:' + farbe + ';color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">' +
               (g.stufe === 'nichtgeoeffnet' ? 'ließ sich nicht öffnen'
@@ -1237,6 +1618,7 @@ function zeigeListe(treffer) {
     });
   });
 
+  verdrahteVerweise(b);
   b.querySelectorAll('.sram-ag-pruef').forEach(btn => {
     btn.addEventListener('mousedown', e => e.preventDefault());
     btn.addEventListener('click', () => startefPruefung(btn.getAttribute('data-nr'), btn));
@@ -1303,7 +1685,8 @@ function zeigeGemerktePruefung() {
   const tage = res.tage;
   const stufe = tage == null ? null : (tage >= FRIST_RUECKVERSAND ? 'rueck' : (tage >= FRIST_ERINNERUNG ? 'erinnern' : 'warten'));
 
-  let h = '<div style="font-weight:700;font-size:13px;margin-bottom:6px;">Auftrag ' + esc(res.order) + '</div>';
+  let h = '<div style="font-weight:700;font-size:13px;margin-bottom:6px;">Auftrag ' +
+          nummerVerweis(res.order) + '</div>';
   h += '<div style="color:#555;margin-bottom:8px;">' + res.anzahl + ' Nachricht(en) &middot; Status ' + esc(res.status || '–') + '</div>';
 
   if (!l && res.korrNichtGeladen) {
@@ -1370,6 +1753,7 @@ function zeigeGemerktePruefung() {
        'border:1px solid #C7C7C7;background:#F7F7F7;border-radius:3px;cursor:pointer;">Neue Suche</button></div>';
   b.innerHTML = h;
 
+  verdrahteVerweise(b);
   const zl = document.getElementById('sram-ag-zurliste');
   if (zl) zl.addEventListener('click', () => {
     const l = hole(KEY_LISTE);
@@ -1436,6 +1820,25 @@ if (IS_TOP) {
         if (!panel) bauePanel();
         stapelSchritt();
         return;
+      }
+
+      // Wartet eine genaue Teilepruefung? Dann ausfuehren, sobald der Auftrag da ist.
+      const teilZiel = hole('sramAgentTeilZiel');
+      if (teilZiel) {
+        const offen = offenerAuftrag();
+        if (offen && offen.nr === String(teilZiel).replace(/^0+/, '')) {
+          vergiss('sramAgentTeilZiel');
+          if (!panel) bauePanel();
+          const bb = document.getElementById('sram-ag-body');
+          if (bb) { bb.dataset.ansicht = 'teile'; bb.innerHTML =
+            '<div style="color:#7A5B00;">Lieferdatum wird berechnet – Auftrag ' + esc(teilZiel) + ' …</div>'; }
+          pruefeTeileHier(teilZiel, (res) => {
+            const l = hole(KEY_TEILELISTE);
+            if (l && l.zeilen) zeigeTeile(l.treffer, l.zeilen);
+            else zeigeStart();
+          });
+          return;
+        }
       }
 
       // Stapel fertig, aber die Fortschrittsanzeige steht noch?
