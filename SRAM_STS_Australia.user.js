@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Texts AUS V3
 // @namespace    https://sram.com
-// @version      5.2.1
+// @version      5.3.0
 // @description  Text Assistant for the SRAM B2B Service Portal – Australia
 // @author       SRAM STS Australia
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -21,7 +21,7 @@ const CATS = Object.keys(DATA);
 // ── Update check ──────────────────────────────────────────
 // Runs over the normal (logged-in) browser session instead of
 // Tampermonkey's unreliable anonymous background check.
-const SCRIPT_VERSION = '5.2.1';
+const SCRIPT_VERSION = '5.3.0';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_STS_Australia.user.js';
 
 function compareVersions(a, b) {
@@ -2323,7 +2323,7 @@ function renderBody() {
          ';border-radius:4px;padding:9px;margin-bottom:14px;">' +
          '<div>' + (ok ? '✔ Order data detected' : '✖ No order data found') + ' · <span style="color:#777;">' + fmtAge(st.ts) + '</span></div>';
     if (ok) {
-      h += '<div style="margin-top:5px;">Order <b>' + esc(st.order) + '</b> · Items: <b>' + st.itemCount + '</b> · Attachments: ' + st.attachments + '</div>';
+      h += '<div style="margin-top:5px;">Order ' + nummerVerweis(st.order) + ' · Items: <b>' + st.itemCount + '</b> · Attachments: ' + st.attachments + '</div>';
       // Per-field character counts are no longer shown - useful while
       // debugging, meaningless to the user.
       // Data source is no longer shown: useful for debugging, confusing
@@ -2365,7 +2365,7 @@ function renderBody() {
       const nachtraege = (s.items || []).filter(x => x._parentItem).length;
       const korr = Array.isArray(s.correspondence) ? s.correspondence.filter(c => korrText(c)).length : 0;
       const entwurf = !!(s.correspondenceDraft && s.correspondenceDraft.text);
-      const nummer = '<a href="#" class="sram-bk-goto" data-nr="' + esc(s.order) +
+      const nummer = '<a href="' + esc(auftragsAdresse(s.order)) + '" class="sram-bk-goto" data-nr="' + esc(s.order) +
         '" style="color:#E31836;text-decoration:underline;">' + esc(s.order) + '</a>';
       const abzeichen = sessionLost
         ? '<span style="background:#B4780D;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">Session expired</span>'
@@ -2410,7 +2410,7 @@ function renderBody() {
              // Clickable order number: jumps straight into that order. Useful mainly
              // outside an order - from the start page you can reach the order whose
              // backup you need.
-             '<b style="font-size:13px;">Order <a href="#" class="sram-bk-goto" data-nr="' + esc(s.order) +
+             '<b style="font-size:13px;">Order <a href="' + esc(auftragsAdresse(s.order)) + '" class="sram-bk-goto" data-nr="' + esc(s.order) +
              '" style="color:#E31836;text-decoration:underline;">' + esc(s.order) + '</a></b>' +
              '<span style="color:#777;font-size:11px;">' + fmtAge(s.ts) + '</span>' +
              (sessionLost ? '<span style="margin-left:auto;background:#B4780D;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;" title="' + fmtAge(s.saveState.at) + '">Session expired ' + fmtAge(s.saveState.at) + '</span>'
@@ -2421,7 +2421,7 @@ function renderBody() {
            (istAktuell
              ? '<div style="margin-top:4px;"><span style="background:#1D9E75;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;">This order is currently open</span></div>'
              : (st && st.found
-                ? '<div style="margin-top:4px;color:#8A8A8A;font-size:10.5px;">Currently open is order ' + esc(st.order) + ' &ndash; open this order to restore into it.</div>'
+                ? '<div style="margin-top:4px;color:#8A8A8A;font-size:10.5px;">Currently open is order ' + nummerVerweis(st.order) + ' &ndash; open this order to restore into it.</div>'
                 : '<div style="margin-top:4px;color:#8A8A8A;font-size:10.5px;">No open order detected.</div>')) +
            '<div style="margin-top:5px;color:#444;">Items: <b>' + (s.items ? s.items.length : 0) + '</b>' +
              ' · Texts: ' + ((tl.TextIntMemo || '').length + (tl.TextShipNote || '').length + (tl.TextHeadNote || '').length) + ' chars' +
@@ -3172,6 +3172,25 @@ function restoreCorrespondence(snap, fertig) {
 // Jumps to an order. The portal uses a hash based address that can be
 // built from the order number. Setting only the hash lets the portal
 // switch screens without a reload.
+// Vollstaendige Adresse eines Auftrags, fuer das href der Verweise.
+//
+// Der Grundteil kommt aus dem laufenden Fenster statt fest eingetragen zu
+// sein: Das Portal ist unter b2b.sram.com erreichbar und unter der langen
+// Adresse bei sramllcprodcf...hana.ondemand.com.
+function auftragsAdresse(nr) {
+  let basis = '';
+  try { const l = window.top.location; basis = l.origin + l.pathname; } catch (e) {}
+  return basis + '#ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
+         '&sap-app-origin-hint=saas_approuter&/orderentry?editing=false';
+}
+
+// Order number as a link. Same look everywhere.
+function nummerVerweis(nr) {
+  return '<a href="' + esc(auftragsAdresse(nr)) + '" class="sram-bk-goto" data-nr="' + esc(nr) +
+         '" title="Click opens here, right-click for a new tab"' +
+         ' style="color:#E31836;text-decoration:underline;font-weight:700;">' + esc(nr) + '</a>';
+}
+
 function gotoOrder(nr) {
   const ziel = 'https://b2b.sram.com/site#ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
                '&sap-app-origin-hint=saas_approuter&/orderentry?editing=false';
@@ -3196,8 +3215,16 @@ function wireGoto(wurzel) {
   wurzel.querySelectorAll('.sram-bk-goto').forEach(a => {
     if (a.dataset.verdrahtet) return;
     a.dataset.verdrahtet = '1';
-    a.addEventListener('mousedown', e => e.preventDefault());
-    a.addEventListener('click', e => { e.preventDefault(); gotoOrder(a.getAttribute('data-nr')); });
+    // No preventDefault on mousedown any more: that would have blocked the
+    // middle mouse button and with it the new tab.
+    a.addEventListener('click', e => {
+      // Ctrl, Shift, Alt or middle button: leave it to the browser so that
+      // "open in new tab" works. The warning about unsaved input is skipped
+      // there on purpose - a new tab discards nothing in the current order.
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      e.preventDefault();
+      gotoOrder(a.getAttribute('data-nr'));
+    });
   });
 }
 
