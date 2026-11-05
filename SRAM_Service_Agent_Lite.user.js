@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Agent lite (Beta)
 // @namespace    https://sram.com
-// @version      0.13.0
+// @version      0.13.1
 // @description  BETA – KVA-Nachverfolgung für das SRAM B2B Service-Portal (Deutschland)
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -38,7 +38,7 @@
 (function () {
 'use strict';
 
-const VERSION = '0.13.0';
+const VERSION = '0.13.1';
 const IS_TOP = (window === window.top);
 
 // Status-Schluessel. Nach Beschreibung zu gehen waere falsch: "Shipment Being
@@ -292,19 +292,46 @@ function fmtDatum(d) {
   } catch (e) { return '–'; }
 }
 
+// Die vollstaendige Adresse eines Auftrags.
+//
+// Der Grundteil wird aus dem laufenden Fenster genommen, nicht fest
+// eingetragen: Das Portal ist unter b2b.sram.com erreichbar und unter der
+// langen Adresse bei sramllcprodcf...hana.ondemand.com. Fest verdrahtet
+// wuerde der Verweis in der einen Umgebung ins Leere zeigen.
+function auftragsAdresse(nr) {
+  let basis = '';
+  try {
+    const l = window.top.location;
+    basis = l.origin + l.pathname;
+  } catch (e) { basis = ''; }
+  return basis + '#ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
+         '&sap-app-origin-hint=&/orderentry?editing=false';
+}
+
 // Auftragsnummer als Verweis - wie im Sicherungs-Panel. Dort hat sich das
 // bewaehrt: man sieht einen Fall und ist mit einem Klick drin.
+//
+// WICHTIG: Hier steht die ECHTE Adresse im href, nicht nur "#". Dadurch
+// funktionieren Rechtsklick -> "Link in neuem Tab oeffnen", die mittlere
+// Maustaste und Strg+Klick ohne eigenes Zutun - der Browser macht das von
+// selbst, sobald ein Verweis ein richtiges Ziel hat. Vorher stand dort "#",
+// und ein Rechtsklick fuehrte auf eine leere Seite.
 function nummerVerweis(nr) {
-  return '<a href="#" class="sram-ag-goto" data-nr="' + esc(nr) + '" ' +
+  return '<a href="' + esc(auftragsAdresse(nr)) + '" class="sram-ag-goto" ' +
+    'data-nr="' + esc(nr) + '" title="Klick öffnet hier, Rechtsklick für neuen Tab" ' +
     'style="font-size:12.5px;font-weight:700;color:#E31836;text-decoration:underline;' +
     'cursor:pointer;">' + esc(nr) + '</a>';
 }
 
-// Verweise in einem Bereich verdrahten
+// Verweise in einem Bereich verdrahten.
+//
+// Der einfache Linksklick wird selbst behandelt, damit die Seite im selben
+// Reiter umschaltet statt neu zu laden. Alles andere - Strg, Umschalt, mittlere
+// Maustaste - wird dem Browser ueberlassen, sonst gaebe es keinen neuen Tab.
 function verdrahteVerweise(bereich) {
   bereich.querySelectorAll('.sram-ag-goto').forEach(a => {
-    a.addEventListener('mousedown', e => e.preventDefault());
     a.addEventListener('click', e => {
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;  // Browser machen lassen
       e.preventDefault();
       const nr = a.getAttribute('data-nr');
       try {
