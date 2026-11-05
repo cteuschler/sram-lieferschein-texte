@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Lieferschein Texte V3
 // @namespace    https://sram.com
-// @version      5.2.0
+// @version      5.3.1
 // @description  Text-Assistent für das SRAM B2B Service-Portal
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -31,7 +31,7 @@ const DATA_DE = {"Federgabel":[{"id":"Federgabel_0_0","heading":"Full Service","
 // ── Update-Check ────────────────────────────────────────────────
 // Läuft über die normale (eingeloggte) Browser-Session statt über
 // Tampermonkeys unzuverlässigen anonymen Hintergrund-Check.
-const SCRIPT_VERSION = '5.2.0';
+const SCRIPT_VERSION = '5.3.1';
 const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/cteuschler/sram-lieferschein-texte/main/SRAM_Lieferschein_Texte.user.js';
 
 // Sofortiger Startup-Log – sollte SOFORT beim Laden der Seite erscheinen,
@@ -2602,7 +2602,7 @@ function renderBody() {
          ';border-radius:4px;padding:9px;margin-bottom:14px;">' +
          '<div>' + (ok ? '✔ Auftragsdaten erkannt' : '✖ Keine Auftragsdaten gefunden') + ' · <span style="color:#777;">' + fmtAge(st.ts) + '</span></div>';
     if (ok) {
-      h += '<div style="margin-top:5px;">Auftrag <b>' + esc(st.order) + '</b> · Positionen: <b>' + st.itemCount + '</b> · Anhänge: ' + st.attachments + '</div>';
+      h += '<div style="margin-top:5px;">Auftrag ' + nummerVerweis(st.order) + ' · Positionen: <b>' + st.itemCount + '</b> · Anhänge: ' + st.attachments + '</div>';
       // Zeichenzahl je Textfeld wird nicht mehr angezeigt - fuer die
       // Fehlersuche war sie nuetzlich, dem Anwender sagt sie nichts.
       // Der Wert bleibt im Statuseintrag erhalten.
@@ -2650,7 +2650,7 @@ function renderBody() {
       const korr = Array.isArray(s.correspondence) ? s.correspondence.filter(c => korrText(c)).length : 0;
       const entwurf = !!(s.correspondenceDraft && s.correspondenceDraft.text);
 
-      const nummer = '<a href="#" class="sram-bk-goto" data-nr="' + esc(s.order) +
+      const nummer = '<a href="' + esc(auftragsAdresse(s.order)) + '" class="sram-bk-goto" data-nr="' + esc(s.order) +
         '" style="color:#E31836;text-decoration:underline;">' + esc(s.order) + '</a>';
       const abzeichen = sessionLost
         ? '<span style="background:#B4780D;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">Sitzung abgelaufen</span>'
@@ -2695,7 +2695,7 @@ function renderBody() {
              // Nuetzlich vor allem ausserhalb eines Auftrags - von der
              // Startseite aus kommt man so zu dem Auftrag, dessen
              // Sicherung man braucht.
-             '<b style="font-size:13px;">Auftrag <a href="#" class="sram-bk-goto" data-nr="' + esc(s.order) +
+             '<b style="font-size:13px;">Auftrag <a href="' + esc(auftragsAdresse(s.order)) + '" class="sram-bk-goto" data-nr="' + esc(s.order) +
              '" style="color:#E31836;text-decoration:underline;">' + esc(s.order) + '</a></b>' +
              '<span style="color:#777;font-size:11px;">' + fmtAge(s.ts) + '</span>' +
              (sessionLost ? '<span style="margin-left:auto;background:#B4780D;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;" title="' + fmtAge(s.saveState.at) + '">Sitzung abgelaufen ' + fmtAge(s.saveState.at) + '</span>'
@@ -2706,7 +2706,7 @@ function renderBody() {
            (istAktuell
              ? '<div style="margin-top:4px;"><span style="background:#1D9E75;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;">Dieser Auftrag ist gerade geoeffnet</span></div>'
              : (st && st.found
-                ? '<div style="margin-top:4px;color:#8A8A8A;font-size:10.5px;">Gerade geoeffnet ist Auftrag ' + esc(st.order) + ' &ndash; zum Zur&uuml;ckschreiben diesen Auftrag &ouml;ffnen.</div>'
+                ? '<div style="margin-top:4px;color:#8A8A8A;font-size:10.5px;">Gerade geoeffnet ist Auftrag ' + nummerVerweis(st.order) + ' &ndash; zum Zur&uuml;ckschreiben diesen Auftrag &ouml;ffnen.</div>'
                 : '<div style="margin-top:4px;color:#8A8A8A;font-size:10.5px;">Kein Auftrag ge&ouml;ffnet erkannt.</div>')) +
            '<div style="margin-top:5px;color:#444;">Positionen: <b>' + (s.items ? s.items.length : 0) + '</b>' +
              ' · Texte: ' + ((tl.TextIntMemo || '').length + (tl.TextShipNote || '').length + (tl.TextHeadNote || '').length) + ' Zeichen' +
@@ -3467,6 +3467,25 @@ function restoreCorrespondence(snap, fertig) {
 // die sich aus der Auftragsnummer bauen laesst. Zuerst wird nur der
 // Teil hinter der Raute gesetzt - dann wechselt das Portal die Maske
 // ohne Neuladen. Klappt das nicht, folgt ein vollstaendiger Aufruf.
+// Vollstaendige Adresse eines Auftrags, fuer das href der Verweise.
+//
+// Der Grundteil kommt aus dem laufenden Fenster statt fest eingetragen zu
+// sein: Das Portal ist unter b2b.sram.com erreichbar und unter der langen
+// Adresse bei sramllcprodcf...hana.ondemand.com.
+function auftragsAdresse(nr) {
+  let basis = '';
+  try { const l = window.top.location; basis = l.origin + l.pathname; } catch (e) {}
+  return basis + '#ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
+         '&sap-app-origin-hint=saas_approuter&/orderentry?editing=false';
+}
+
+// Auftragsnummer als Verweis. Dieselbe Gestaltung an allen Stellen.
+function nummerVerweis(nr) {
+  return '<a href="' + esc(auftragsAdresse(nr)) + '" class="sram-bk-goto" data-nr="' + esc(nr) +
+         '" title="Klick öffnet hier, Rechtsklick für neuen Tab"' +
+         ' style="color:#E31836;text-decoration:underline;font-weight:700;">' + esc(nr) + '</a>';
+}
+
 function gotoOrder(nr) {
   const ziel = 'https://b2b.sram.com/site#ServiceOrders-Create?Order=' + encodeURIComponent(nr) +
                '&sap-app-origin-hint=saas_approuter&/orderentry?editing=false';
@@ -3495,8 +3514,17 @@ function wireGoto(wurzel) {
   wurzel.querySelectorAll('.sram-bk-goto').forEach(a => {
     if (a.dataset.verdrahtet) return;
     a.dataset.verdrahtet = '1';
-    a.addEventListener('mousedown', e => e.preventDefault());
-    a.addEventListener('click', e => { e.preventDefault(); gotoOrder(a.getAttribute('data-nr')); });
+    // Kein preventDefault auf mousedown mehr: Das haette die mittlere
+    // Maustaste blockiert und damit den neuen Reiter verhindert.
+    a.addEventListener('click', e => {
+      // Strg, Umschalt, Alt oder mittlere Maustaste: Browser machen lassen,
+      // damit "in neuem Tab oeffnen" funktioniert. Die Warnung vor
+      // ungespeicherten Eingaben entfaellt dort bewusst - ein neuer Reiter
+      // verwirft im aktuellen Auftrag ja nichts.
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      e.preventDefault();
+      gotoOrder(a.getAttribute('data-nr'));
+    });
   });
 }
 
