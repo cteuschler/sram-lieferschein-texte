@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Agent lite (Beta)
 // @namespace    https://sram.com
-// @version      0.13.1
+// @version      0.14.0
 // @description  BETA – KVA-Nachverfolgung für das SRAM B2B Service-Portal (Deutschland)
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -38,7 +38,7 @@
 (function () {
 'use strict';
 
-const VERSION = '0.13.1';
+const VERSION = '0.14.0';
 const IS_TOP = (window === window.top);
 
 // Status-Schluessel. Nach Beschreibung zu gehen waere falsch: "Shipment Being
@@ -71,6 +71,9 @@ const KEY_GEPRUEFT = 'sramAgentGeprueft';
 // jedem Sprung von vorne an.
 const KEY_OFFEN = 'sramAgentOffen';
 const KEY_LISTE = 'sramAgentListe';
+const KEY_LETZTE = 'sramAgentLetzteAnsicht';   // 'kva' | 'teile'
+const KEY_BESUCHT = 'sramAgentBesucht';
+const KEY_POS = 'sramAgentPanelPos';
 
 function merke(schluessel, wert) {
   try { sessionStorage.setItem(schluessel, JSON.stringify(wert)); } catch (e) {}
@@ -91,6 +94,23 @@ function vergiss(schluessel) {
 function fachName() {
   const k = aktiveKennung();
   return k ? (k.vertretung ? 'v:' : 'e:') + String(k.wert).toLowerCase() : 'unbekannt';
+}
+// Besuchte Auftraege: jeder Auftrag, der waehrend der Sitzung im Portal offen war,
+// wird je Person vermerkt - auch ohne dass der Agent ihn geprueft hat.
+function besuchtLesen() {
+  try { return (JSON.parse(sessionStorage.getItem(KEY_BESUCHT) || '{}'))[fachName()] || {}; } catch (e) { return {}; }
+}
+function besuchtMerken(nr) {
+  try {
+    const k = String(nr).replace(/^0+/, '');
+    if (!k) return;
+    const alle = JSON.parse(sessionStorage.getItem(KEY_BESUCHT) || '{}');
+    const fach = fachName();
+    if (!alle[fach]) alle[fach] = {};
+    if (alle[fach][k]) return;
+    alle[fach][k] = Date.now();
+    sessionStorage.setItem(KEY_BESUCHT, JSON.stringify(alle));
+  } catch (e) {}
 }
 function geprueffteLesen() {
   try {
@@ -218,7 +238,7 @@ function identLesen() {
     const d = JSON.parse(roh);
     const mail = angemeldeteMail();
     if (mail && d.mail && d.mail !== mail) return null;   // anderer Benutzer
-    return d;
+    return nurName(d);
   } catch (e) { return null; }
 }
 
@@ -238,12 +258,12 @@ const KEY_SCHLANGE = 'sramAgentSchlange';
 let stapelLaeuft = false;   // verhindert, dass der Takt sich selbst ueberholt
 
 function vertretungLesen() {
-  try { return JSON.parse(sessionStorage.getItem(KEY_VERTRETUNG) || 'null'); } catch (e) { return null; }
+  try { return nurName(JSON.parse(sessionStorage.getItem(KEY_VERTRETUNG) || 'null')); } catch (e) { return null; }
 }
 function vertretungSetzen(wert) {
   try {
     if (wert) sessionStorage.setItem(KEY_VERTRETUNG, JSON.stringify({
-      art: /^\d+$/.test(wert) ? 'nummer' : 'name', wert: wert
+      art: 'name', wert: wert
     }));
     else sessionStorage.removeItem(KEY_VERTRETUNG);
   } catch (e) {}
@@ -257,6 +277,8 @@ function aktiveKennung() {
   return i ? { art: i.art, wert: i.wert, vertretung: false } : null;
 }
 
+// Eine frueher gespeicherte Owner No. gilt nicht mehr - dann neu nach dem Namen fragen.
+function nurName(k) { return (k && k.art !== 'nummer' && !/^\d+$/.test(String(k.wert))) ? k : null; }
 function identSchreiben(art, wert) {
   try {
     localStorage.setItem(KEY_IDENT, JSON.stringify({
@@ -393,7 +415,7 @@ function sucheAuftraege(fertig) {
     SalesOrganization: { ranges: [{ exclude: false, operation: 'EQ',
       keyField: 'SalesOrganization', value1: SALES_ORG, value2: null }] }
   };
-  const feld = (ident.art === 'nummer') ? 'EmployeePartner' : 'EmployeeName';
+  const feld = 'EmployeeName';   // nur der volle Name funktioniert, die Owner No. nicht
   daten[feld] = { ranges: [{ exclude: false, operation: 'EQ',
     keyField: feld, value1: ident.wert, value2: null }] };
 
@@ -452,7 +474,7 @@ function sucheTeile(fertig) {
     SalesOrganization: { ranges: [{ exclude: false, operation: 'EQ',
       keyField: 'SalesOrganization', value1: SALES_ORG, value2: null }] }
   };
-  const feld = (ident.art === 'nummer') ? 'EmployeePartner' : 'EmployeeName';
+  const feld = 'EmployeeName';   // nur der volle Name funktioniert, die Owner No. nicht
   daten[feld] = { ranges: [{ exclude: false, operation: 'EQ',
     keyField: feld, value1: ident.wert, value2: null }] };
 
@@ -952,6 +974,16 @@ function positionierePanel() {
       else { links = 20; ebene = 2147483050; verdeckt = true; }
     }
   } catch (e) {}
+  const pos = hole(KEY_POS);
+  if (pos) {
+    // Vom Nutzer verschoben: Position behalten, nur im Fenster halten.
+    const x = Math.max(0, Math.min(pos.x, window.innerWidth - 120));
+    const y = Math.max(0, Math.min(pos.y, window.innerHeight - 40));
+    panel.style.left = x + 'px'; panel.style.top = y + 'px'; panel.style.bottom = 'auto';
+    if (panel.style.zIndex !== '2147483050') panel.style.zIndex = '2147483050';
+    const vh = document.getElementById('sram-ag-verdeckt'); if (vh) vh.remove();
+    return;
+  }
   if (panel.style.left !== links + 'px') panel.style.left = links + 'px';
   if (panel.style.zIndex !== String(ebene)) panel.style.zIndex = String(ebene);
 
@@ -1004,8 +1036,53 @@ function bauePanel() {
 
   document.body.appendChild(panel);
   document.getElementById('sram-ag-x').addEventListener('click', toggle);
+  machVerschiebbar();
   zeigeIdent();
-  zeigeStart();
+  if (!stelleAnsichtWiederHer()) zeigeStart();
+}
+
+// Beim Oeffnen: zuletzt gezogene Liste wieder zeigen, statt von vorne anzufangen.
+// Die Listen liegen im Sitzungsspeicher und gehoeren zur gerade aktiven Person
+// (beim Wechsel der Kennung werden sie verworfen).
+function stelleAnsichtWiederHer() {
+  if (!aktiveKennung()) return false;
+  if (!byIdSuffix(null, 'smartFilterBar') && !hole(KEY_LISTE) && !hole(KEY_TEILELISTE)) return false;
+  const letzte = hole(KEY_LETZTE);
+  const lt = hole(KEY_TEILELISTE);
+  const l = hole(KEY_LISTE);
+  if (letzte === 'teile' && lt && lt.zeilen && lt.zeilen.length) { zeigeTeile(lt.treffer, lt.zeilen); return true; }
+  if (l && l.zeilen && l.zeilen.length) { gefunden = l.zeilen; zeigeListe(l.treffer); return true; }
+  if (lt && lt.zeilen && lt.zeilen.length) { zeigeTeile(lt.treffer, lt.zeilen); return true; }
+  return false;
+}
+
+// Kopfzeile ziehen = Panel verschieben. Doppelklick auf die Kopfzeile setzt die
+// Position zurueck. Die Lage gilt fuer die Browser-Sitzung.
+function machVerschiebbar() {
+  const kopf = panel && panel.firstElementChild;
+  if (!kopf) return;
+  kopf.style.cursor = 'move';
+  kopf.title = 'Ziehen zum Verschieben · Doppelklick = zurücksetzen';
+  kopf.addEventListener('dblclick', e => {
+    if (e.target.id === 'sram-ag-x') return;
+    vergiss(KEY_POS);
+    panel.style.top = ''; panel.style.bottom = '122px';
+    positionierePanel();
+  });
+  kopf.addEventListener('mousedown', e => {
+    if (e.target.id === 'sram-ag-x' || e.button !== 0) return;
+    const r = panel.getBoundingClientRect();
+    const dx = e.clientX - r.left, dy = e.clientY - r.top;
+    const move = ev => {
+      const x = Math.max(0, Math.min(ev.clientX - dx, window.innerWidth - 120));
+      const y = Math.max(0, Math.min(ev.clientY - dy, window.innerHeight - 40));
+      merke(KEY_POS, { x: x, y: y });
+      positionierePanel();
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
 }
 
 function zeigeIdent() {
@@ -1021,7 +1098,6 @@ function zeigeIdent() {
     el.style.borderBottomColor = '#E0B4B4';
     el.style.color = '#A02020';
     el.innerHTML = '<b>Vertretung für ' + esc(v.wert) + '</b>' +
-      (v.art === 'nummer' ? ' (SRAM Owner No.)' : '') +
       ' &middot; <a href="#" id="sram-ag-vertrende" style="color:#A02020;">beenden</a>' +
       '<div style="font-size:10px;margin-top:2px;">Angemeldet als ' + esc(i ? i.wert : (mail || '–')) +
       ' – gilt nur für diese Browser-Sitzung.</div>';
@@ -1030,7 +1106,6 @@ function zeigeIdent() {
     el.style.borderBottomColor = '#DCE6EE';
     el.style.color = '#2A5A7A';
     el.innerHTML = 'Bearbeiter: <b>' + esc(i.wert) + '</b>' +
-      (i.art === 'nummer' ? ' (SRAM Owner No.)' : '') +
       ' &middot; <a href="#" id="sram-ag-identaendern" style="color:#2A5A7A;">ändern</a>' +
       ' &middot; <a href="#" id="sram-ag-vertretung" style="color:#2A5A7A;">Vertretung</a>';
   } else {
@@ -1058,15 +1133,16 @@ function frageIdent() {
   const alt = identLesen();
   const wert = window.prompt(
     'Nach wessen Aufträgen soll gesucht werden?\n\n' +
-    'Employee Name eintragen, zum Beispiel: Christian Teuschler\n' +
-    'Oder die SRAM Owner No., zum Beispiel: 1091\n\n' +
+    'Den vollen Employee Name eintragen, genau wie im Portal, zum Beispiel: Christian Teuschler\n' +
+    '(Die SRAM Owner No. funktioniert nicht.)\n\n' +
     'Die Angabe wird an ' + (angemeldeteMail() || 'diesen Browser') + ' gebunden.',
     alt ? alt.wert : '');
   if (wert === null) return;
   const w = wert.trim();
   if (!w) return;
-  // Nur Ziffern -> Owner No., sonst Name
-  identSchreiben(/^\d+$/.test(w) ? 'nummer' : 'name', w);
+  if (/^\d+$/.test(w)) { window.alert('Bitte den vollen Namen eintragen, nicht die Nummer. Die Suche funktioniert nur mit dem Employee Name.'); return; }
+  vergiss(KEY_LISTE); vergiss(KEY_TEILELISTE);
+  identSchreiben('name', w);
   zeigeIdent();
   zeigeStart();
 }
@@ -1074,12 +1150,12 @@ function frageIdent() {
 function frageVertretung() {
   const wert = window.prompt(
     'Wessen Aufträge sollen geprüft werden?\n\n' +
-    'Employee Name eintragen, zum Beispiel: Uwe Kleedoerfer\n' +
-    'Oder dessen SRAM Owner No.\n\n' +
+    'Den vollen Employee Name eintragen, zum Beispiel: Uwe Kleedoerfer\n\n' +
     'Die Vertretung gilt nur für diese Browser-Sitzung und wird im Panel ' +
     'dauerhaft angezeigt. Leer lassen zum Beenden.', '');
   if (wert === null) return;
   const w = wert.trim();
+  if (/^\d+$/.test(w)) { window.alert('Bitte den vollen Namen eintragen, nicht die Nummer.'); return; }
   vertretungSetzen(w || null);
   // Nur die Trefferliste verwerfen; die Pruefergebnisse liegen je Person
   // getrennt und bleiben erhalten.
@@ -1357,6 +1433,7 @@ function stapelSchritt() {
 }
 
 function zeigeTeile(treffer, zeilen) {
+  merke(KEY_LETZTE, 'teile');
   const b = document.getElementById('sram-ag-body');
   if (!b) return;
   b.dataset.ansicht = 'teile';
@@ -1524,6 +1601,7 @@ function zeigeStapelstand(q, nr) {
 function zeigeListe(treffer) {
   const b = document.getElementById('sram-ag-body');
   if (!b) return;
+  merke(KEY_LETZTE, 'kva');
   if (!gefunden.length) {
     b.innerHTML = '<div style="color:#1A7A45;">Keine Aufträge im Status COM gefunden. Nichts zu tun.</div>' +
       '<div style="margin-top:10px;"><button id="sram-ag-back">Zurück</button></div>';
@@ -1532,6 +1610,7 @@ function zeigeListe(treffer) {
   }
   b.dataset.ansicht = 'liste';
   const geprueft = geprueffteLesen();
+  const besucht = besuchtLesen();
   const schluessel = nr => String(nr).replace(/^0+/, '');
 
   // Ungepruefte zuerst - sonst arbeitet man sich immer wieder an denselben ab.
@@ -1540,6 +1619,9 @@ function zeigeListe(treffer) {
     const gx = geprueft[schluessel(x.order)] ? 1 : 0;
     const gy = geprueft[schluessel(y.order)] ? 1 : 0;
     if (gx !== gy) return gx - gy;
+    const bx = besucht[schluessel(x.order)] ? 1 : 0;
+    const by = besucht[schluessel(y.order)] ? 1 : 0;
+    if (bx !== by) return bx - by;
     return (y.tageVorlaeufig || 0) - (x.tageVorlaeufig || 0);
   });
   const offenAnzahl = liste.filter(z => !geprueft[schluessel(z.order)]).length;
@@ -1603,6 +1685,7 @@ function zeigeListe(treffer) {
                : g.stufe === 'erinnern' ? 'Erinnerung fällig'
                : g.vonSram === false ? 'Händler hat geantwortet'
                : g.stufe === 'unklar' ? 'unklar' : 'nichts zu tun') + '</span>' : '') +
+        (!g && besucht[schluessel(z.order)] ? '<span style="background:#5B7C99;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">bereits besucht</span>' : '') +
         (z.neueNachricht ? '<span style="background:#1D9E75;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">neue Nachricht</span>' : '') +
         '<button class="sram-ag-pruef" data-nr="' + esc(z.order) + '" style="margin-left:auto;font-size:10.5px;' +
           'padding:3px 9px;border:1px solid #C7C7C7;background:#F7F7F7;border-radius:3px;cursor:pointer;">' +
@@ -1883,6 +1966,12 @@ if (IS_TOP) {
           else zeigeStart();
           return;
         }
+      }
+
+      // Auftrag offen und kein Stapel aktiv: als besucht vermerken.
+      if (!hole(KEY_SCHLANGE) && aktiveKennung()) {
+        const ao = offenerAuftrag();
+        if (ao && ao.nr) besuchtMerken(ao.nr);
       }
 
       // Panel nach einem Seitenwechsel wieder aufbauen, wenn es vorher offen
