@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Agent lite (Beta)
 // @namespace    https://sram.com
-// @version      0.14.2
+// @version      0.14.3
 // @description  BETA – KVA-Nachverfolgung für das SRAM B2B Service-Portal (Deutschland)
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -38,7 +38,7 @@
 (function () {
 'use strict';
 
-const VERSION = '0.14.2';
+const VERSION = '0.14.3';
 const IS_TOP = (window === window.top);
 
 // Status-Schluessel. Nach Beschreibung zu gehen waere falsch: "Shipment Being
@@ -98,21 +98,40 @@ function fachName() {
 // Besuchte Auftraege: jeder Auftrag, der waehrend der Sitzung im Portal offen war,
 // wird je Person vermerkt - auch ohne dass der Agent ihn geprueft hat.
 function besuchtLesen() {
-  try { return (JSON.parse(sessionStorage.getItem(KEY_BESUCHT) || '{}'))[fachName()] || {}; } catch (e) { return {}; }
+  // Geteilter Speicher (localStorage), damit auch Auftraege zaehlen, die in einem
+  // NEUEN TAB geoeffnet wurden (Rechtsklick). Der Sitzungsspeicher ist je Tab
+  // getrennt - dort gingen diese Besuche verloren. Auftragsnummern sind
+  // eindeutig, deshalb braucht es keine Trennung nach Person. Gueltig 12 Stunden.
+  try {
+    const alle = JSON.parse(localStorage.getItem(KEY_BESUCHT) || '{}');
+    const grenze = Date.now() - 12 * 3600 * 1000;
+    const r = {};
+    Object.keys(alle).forEach(k => { if (alle[k] > grenze) r[k] = alle[k]; });
+    return r;
+  } catch (e) { return {}; }
 }
 function besuchtMerken(nr) {
   try {
     const k = String(nr).replace(/^0+/, '');
     if (!k) return;
-    const alle = JSON.parse(sessionStorage.getItem(KEY_BESUCHT) || '{}');
-    const fach = fachName();
-    if (!alle[fach]) alle[fach] = {};
+    const alle = besuchtLesen();
     const jetzt = Date.now();
-    if (alle[fach][k] && jetzt - alle[fach][k] < 5000) return;
-    alle[fach][k] = jetzt;
-    sessionStorage.setItem(KEY_BESUCHT, JSON.stringify(alle));
+    if (alle[k] && jetzt - alle[k] < 5000) return;
+    alle[k] = jetzt;
+    localStorage.setItem(KEY_BESUCHT, JSON.stringify(alle));
   } catch (e) {}
 }
+// Liste neu zeichnen, wenn in einem anderen Tab ein Auftrag besucht wurde.
+window.addEventListener('storage', e => {
+  if (e.key !== KEY_BESUCHT) return;
+  try {
+    const b = document.getElementById('sram-ag-body');
+    if (b && b.dataset.ansicht === 'liste') {
+      const l = hole(KEY_LISTE);
+      if (l && l.zeilen) { gefunden = l.zeilen; zeigeListe(l.treffer); }
+    }
+  } catch (x) {}
+});
 function geprueffteLesen() {
   try {
     const alle = JSON.parse(sessionStorage.getItem(KEY_GEPRUEFT) || '{}');
