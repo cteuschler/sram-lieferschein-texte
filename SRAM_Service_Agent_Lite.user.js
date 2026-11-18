@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SRAM Service Agent lite (Beta)
 // @namespace    https://sram.com
-// @version      0.14.1
+// @version      0.14.2
 // @description  BETA – KVA-Nachverfolgung für das SRAM B2B Service-Portal (Deutschland)
 // @author       SRAM STS
 // @match        https://sramllcprodcf.cpp.cfapps.us10.hana.ondemand.com/*
@@ -38,7 +38,7 @@
 (function () {
 'use strict';
 
-const VERSION = '0.14.1';
+const VERSION = '0.14.2';
 const IS_TOP = (window === window.top);
 
 // Status-Schluessel. Nach Beschreibung zu gehen waere falsch: "Shipment Being
@@ -107,8 +107,9 @@ function besuchtMerken(nr) {
     const alle = JSON.parse(sessionStorage.getItem(KEY_BESUCHT) || '{}');
     const fach = fachName();
     if (!alle[fach]) alle[fach] = {};
-    if (alle[fach][k]) return;
-    alle[fach][k] = Date.now();
+    const jetzt = Date.now();
+    if (alle[fach][k] && jetzt - alle[fach][k] < 5000) return;
+    alle[fach][k] = jetzt;
     sessionStorage.setItem(KEY_BESUCHT, JSON.stringify(alle));
   } catch (e) {}
 }
@@ -1615,13 +1616,17 @@ function zeigeListe(treffer) {
 
   // Ungepruefte zuerst - sonst arbeitet man sich immer wieder an denselben ab.
   // Innerhalb der Gruppen die aeltesten oben.
+  // Von dir geoeffnet = nach der letzten Agent-Pruefung (oder ohne Pruefung)
+  // mindestens 10 Sekunden im Auftrag gewesen. Diese rutschen nach unten.
+  const warDrin = nr => {
+    const bz = besucht[schluessel(nr)];
+    const g = geprueft[schluessel(nr)];
+    return !!bz && (!g || bz > g.zeit + 10000);
+  };
+  const rang = nr => warDrin(nr) ? 2 : (geprueft[schluessel(nr)] ? 1 : 0);
   const liste = [...gefunden].sort((x, y) => {
-    const gx = geprueft[schluessel(x.order)] ? 1 : 0;
-    const gy = geprueft[schluessel(y.order)] ? 1 : 0;
-    if (gx !== gy) return gx - gy;
-    const bx = besucht[schluessel(x.order)] ? 1 : 0;
-    const by = besucht[schluessel(y.order)] ? 1 : 0;
-    if (bx !== by) return bx - by;
+    const rx = rang(x.order), ry = rang(y.order);
+    if (rx !== ry) return rx - ry;
     return (y.tageVorlaeufig || 0) - (x.tageVorlaeufig || 0);
   });
   const offenAnzahl = liste.filter(z => !geprueft[schluessel(z.order)]).length;
@@ -1672,7 +1677,7 @@ function zeigeListe(treffer) {
       if (g.stufe === 'nichtgeladen' || g.stufe === 'nichtgeoeffnet') farbe = '#B4780D';   // nicht gruen!
       else if (g.stufe === 'warten' || g.vonSram === false) farbe = '#1D9E75';
     }
-    h += '<div class="sram-ag-karte" data-nr="' + esc(z.order) + '" style="border:1px solid ' +
+    h += '<div class="sram-ag-karte" data-nr="' + esc(z.order) + '" style="' + (warDrin(z.order) ? 'opacity:.6;' : '') + 'border:1px solid ' +
          (g ? '#CFE8DA' : '#E5E5E5') + ';background:' + (g ? '#FBFEFC' : '#fff') + ';' +
          'border-left:3px solid ' + farbe + ';border-radius:4px;padding:7px 9px;margin-bottom:6px;">' +
       '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">' +
@@ -1685,7 +1690,8 @@ function zeigeListe(treffer) {
                : g.stufe === 'erinnern' ? 'Erinnerung fällig'
                : g.vonSram === false ? 'Händler hat geantwortet'
                : g.stufe === 'unklar' ? 'unklar' : 'nichts zu tun') + '</span>' : '') +
-        (!g && besucht[schluessel(z.order)] ? '<span style="background:#5B7C99;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">bereits besucht</span>' : '') +
+        (warDrin(z.order) ? '<span title="Du warst nach der letzten Prüfung in diesem Auftrag" style="background:#3A5F7D;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">✓ von dir geöffnet ' +
+          new Date(besucht[schluessel(z.order)]).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + '</span>' : '') +
         (z.neueNachricht ? '<span style="background:#1D9E75;color:#fff;font-size:9.5px;font-weight:700;padding:1px 5px;border-radius:3px;">neue Nachricht</span>' : '') +
         '<button class="sram-ag-pruef" data-nr="' + esc(z.order) + '" style="margin-left:auto;font-size:10.5px;' +
           'padding:3px 9px;border:1px solid #C7C7C7;background:#F7F7F7;border-radius:3px;cursor:pointer;">' +
@@ -1969,7 +1975,7 @@ if (IS_TOP) {
       }
 
       // Auftrag offen und kein Stapel aktiv: als besucht vermerken.
-      if (!hole(KEY_SCHLANGE) && aktiveKennung()) {
+      if (!hole(KEY_SCHLANGE) && !hole('sramAgentPruefung') && aktiveKennung()) {
         const ao = offenerAuftrag();
         if (ao && ao.nr) besuchtMerken(ao.nr);
       }
